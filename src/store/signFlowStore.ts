@@ -6,6 +6,7 @@ import type {
   SignMethod,
   ConsentRecord,
   ConsentStatus,
+  TimelineNode,
 } from "@/types";
 import { specialConditions as defaultConditions } from "@/data/mockFAQs";
 import { findAppointmentByPhone } from "@/data/mockAppointments";
@@ -38,10 +39,38 @@ interface SignFlowStore extends SignFlowState {
   checkSmsValidNow: () => boolean;
 }
 
+const CONSENT_RECORDS_KEY = "yuemei_consent_records";
+
+function loadConsentRecords(): ConsentRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(CONSENT_RECORDS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as ConsentRecord[];
+  } catch {
+    return [];
+  }
+}
+
+function saveConsentRecords(records: ConsentRecord[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CONSENT_RECORDS_KEY, JSON.stringify(records));
+  } catch {
+  }
+}
+
 function generateQueueNumber(): string {
   const n = Math.floor(Math.random() * 90) + 10;
   return `A${n}`;
 }
+
+const initialTimelineDraft = {
+  queryAt: null,
+  allRisksReadAt: null,
+  qaCompletedAt: null,
+  nurseReviewedAt: null,
+};
 
 const initialState: SignFlowState = {
   phone: "",
@@ -63,29 +92,53 @@ const initialState: SignFlowState = {
     reviewedItems: [],
   },
   confirmedSignMethod: null,
-  consentRecords: [],
+  consentRecords: loadConsentRecords(),
+  timelineDraft: { ...initialTimelineDraft },
 };
 
 export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
   ...initialState,
 
-  setPhone: (phone) => set({ phone }),
+  setPhone: (phone) =>
+    set({
+      phone,
+      timelineDraft: { ...initialTimelineDraft },
+    }),
 
   queryAppointment: () => {
     const { phone } = get();
     const apt = findAppointmentByPhone(phone);
-    if (apt) set({ appointment: apt });
+    if (apt) {
+      set({
+        appointment: apt,
+        timelineDraft: {
+          ...get().timelineDraft,
+          queryAt: new Date().toISOString(),
+        },
+      });
+    }
     return apt;
   },
 
   setAppointment: (apt) => set({ appointment: apt }),
 
   markRiskUnderstood: (riskId) =>
-    set((s) => ({
-      understoodRisks: s.understoodRisks.includes(riskId)
+    set((s) => {
+      const nextUnderstood = s.understoodRisks.includes(riskId)
         ? s.understoodRisks
-        : [...s.understoodRisks, riskId],
-    })),
+        : [...s.understoodRisks, riskId];
+      const nextTimelineDraft = { ...s.timelineDraft };
+      if (
+        nextUnderstood.length === 4 &&
+        !nextTimelineDraft.allRisksReadAt
+      ) {
+        nextTimelineDraft.allRisksReadAt = new Date().toISOString();
+      }
+      return {
+        understoodRisks: nextUnderstood,
+        timelineDraft: nextTimelineDraft,
+      };
+    }),
 
   isRiskUnderstood: (riskId) =>
     get().understoodRisks.includes(riskId),
@@ -128,7 +181,16 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
           };
         }
       }
-      return { specialConditions: next, nurseReview };
+      const nextTimelineDraft = { ...s.timelineDraft };
+      const hasAnyChecked = next.some((c) => c.checked);
+      if (hasAnyChecked && !nextTimelineDraft.qaCompletedAt) {
+        nextTimelineDraft.qaCompletedAt = new Date().toISOString();
+      }
+      return {
+        specialConditions: next,
+        nurseReview,
+        timelineDraft: nextTimelineDraft,
+      };
     }),
 
   hasCheckedSpecialCondition: () =>
@@ -156,6 +218,11 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
         reviewedAt: reviewedItems.length > 0 ? new Date().toISOString() : null,
         reviewedItems,
       },
+      timelineDraft: {
+        ...get().timelineDraft,
+        nurseReviewedAt:
+          reviewedItems.length > 0 ? new Date().toISOString() : null,
+      },
     }),
 
   completeFlow: () => {
@@ -173,6 +240,44 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
     } else {
       status = "called";
     }
+    const timelineDraft = state.timelineDraft;
+    const nurseReview = state.nurseReview;
+    const riskCount = state.understoodRisks.length;
+    const timeline: TimelineNode[] = [
+      {
+        key: "query_appointment",
+        title: "查询预约",
+        iconName: "Search",
+        completedAt: timelineDraft.queryAt,
+      },
+      {
+        key: "read_risks",
+        title: `阅读风险（${riskCount}/${riskCount}）`,
+        iconName: "ClipboardCheck",
+        completedAt: timelineDraft.allRisksReadAt,
+      },
+      {
+        key: "answer_qa",
+        title: "勾选问答",
+        iconName: "ListChecks",
+        completedAt: timelineDraft.qaCompletedAt,
+      },
+      {
+        key: "nurse_review",
+        title: "护士复核（如适用）",
+        iconName: "Stethoscope",
+        completedAt:
+          timelineDraft.nurseReviewedAt ||
+          (nurseReview.reviewed ? nurseReview.reviewedAt : null),
+        skipped: !hasNeedNurseReview,
+      },
+      {
+        key: "submit_signature",
+        title: "提交签名",
+        iconName: "PenLine",
+        completedAt: new Date().toISOString(),
+      },
+    ];
     const rec: ConsentRecord = {
       id: `CR-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -203,13 +308,16 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
         finalSignMethod === "sms" && state.smsVerified ? state.phone : undefined,
       voiceCompleted: state.voiceCompleted,
       submittedAt: new Date().toISOString(),
+      timeline,
     };
-    set((s) => ({
+    const nextRecords = [rec, ...state.consentRecords];
+    saveConsentRecords(nextRecords);
+    set({
       completed: true,
       queueNumber: qn,
       confirmedSignMethod: finalSignMethod,
-      consentRecords: [rec, ...s.consentRecords],
-    }));
+      consentRecords: nextRecords,
+    });
   },
 
   resetFlow: () =>
@@ -231,6 +339,7 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
         ...initialState.nurseReview,
       },
       confirmedSignMethod: initialState.confirmedSignMethod,
+      timelineDraft: { ...initialTimelineDraft },
     }),
 
   fullReset: () => set({ ...initialState }),
@@ -262,17 +371,23 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
     return false;
   },
 
-  addConsentRecord: (rec) =>
-    set((s) => ({
-      consentRecords: [rec, ...s.consentRecords],
-    })),
+  addConsentRecord: (rec) => {
+    const nextRecords = [rec, ...get().consentRecords];
+    saveConsentRecords(nextRecords);
+    set({
+      consentRecords: nextRecords,
+    });
+  },
 
-  updateConsentRecordStatus: (id, status) =>
-    set((s) => ({
-      consentRecords: s.consentRecords.map((r) =>
-        r.id === id ? { ...r, status } : r
-      ),
-    })),
+  updateConsentRecordStatus: (id, status) => {
+    const nextRecords = get().consentRecords.map((r) =>
+      r.id === id ? { ...r, status } : r
+    );
+    saveConsentRecords(nextRecords);
+    set({
+      consentRecords: nextRecords,
+    });
+  },
 
   findConsentRecordById: (id) =>
     get().consentRecords.find((r) => r.id === id),

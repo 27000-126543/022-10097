@@ -19,12 +19,17 @@ import {
   CheckSquare,
   Square,
   Sparkles,
+  Search,
+  ClipboardCheck,
+  ListChecks,
+  Clock,
+  Check,
 } from 'lucide-react';
 import { useSignFlowStore } from '@/store/signFlowStore';
 import { riskPoints } from '@/data/mockRisks';
 import { specialConditions as allConditions } from '@/data/mockFAQs';
 import { maskPhone, cn } from '@/lib/utils';
-import type { ConsentRecord, SignMethod } from '@/types';
+import type { ConsentRecord, SignMethod, TimelineNode } from '@/types';
 
 function formatDateCN(ts: string | null): string {
   if (!ts) return '';
@@ -45,6 +50,13 @@ function formatTime(ts: string | null): string {
   const d = new Date(ts);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function formatTS(iso: string | null): string {
+  if (!iso) return '--:--:--';
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function generateRecordNo(createdAt: string): string {
@@ -146,6 +158,60 @@ export default function ConsentPreviewPage() {
   const checkedConditionIds = useMemo(() => {
     if (!record) return new Set<string>();
     return new Set(record.checkedConditions.map((c) => c.id));
+  }, [record]);
+
+  const iconMap = {
+    Search,
+    ClipboardCheck,
+    ListChecks,
+    Stethoscope,
+    PenLine,
+  };
+
+  const processedTimeline = useMemo((): TimelineNode[] => {
+    if (!record) return [];
+
+    if (record.timeline && record.timeline.length >= 5) {
+      return record.timeline;
+    }
+
+    const hasNeedNurseReview = record.checkedConditions.some(
+      (c) => c.needNurseReview
+    );
+
+    return [
+      {
+        key: 'query_appointment',
+        title: '查询预约',
+        iconName: 'Search',
+        completedAt: record.createdAt,
+      },
+      {
+        key: 'read_risks',
+        title: `阅读风险（${record.understoodRisks.length}/${record.understoodRisks.length}）`,
+        iconName: 'ClipboardCheck',
+        completedAt: null,
+      },
+      {
+        key: 'answer_qa',
+        title: '勾选问答',
+        iconName: 'ListChecks',
+        completedAt: null,
+      },
+      {
+        key: 'nurse_review',
+        title: '护士复核（如适用）',
+        iconName: 'Stethoscope',
+        completedAt: record.nurseReview.reviewedAt,
+        skipped: !hasNeedNurseReview,
+      },
+      {
+        key: 'submit_signature',
+        title: '提交签名',
+        iconName: 'PenLine',
+        completedAt: record.submittedAt,
+      },
+    ];
   }, [record]);
 
   useEffect(() => {
@@ -564,6 +630,127 @@ export default function ConsentPreviewPage() {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+
+              <SectionDivider />
+
+              <div>
+                <SectionHeader icon={Clock} title="签署流程时间线" />
+                <div className="relative rounded-2xl bg-warmwhite/60 p-4 pl-6">
+                  {processedTimeline.map((node, idx) => {
+                    const IconComp = iconMap[node.iconName];
+                    const isCompleted = !!node.completedAt;
+                    const isSkipped = !!node.skipped;
+                    const isNurseReview = node.key === 'nurse_review';
+                    const isCurrent =
+                      !isCompleted &&
+                      !isSkipped &&
+                      idx > 0 &&
+                      !!processedTimeline[idx - 1].completedAt;
+
+                    const prevCompleted =
+                      idx === 0 ? true : !!processedTimeline[idx - 1].completedAt;
+                    const lineSolid = isCompleted || (isSkipped && prevCompleted);
+
+                    return (
+                      <div key={node.key} className="relative pb-6 last:pb-0">
+                        {idx < processedTimeline.length - 1 && (
+                          <div
+                            className={cn(
+                              'absolute left-[10px] top-5 w-px',
+                              lineSolid
+                                ? 'bg-gradient-to-b from-rose/60 to-rose-light/40'
+                                : 'bg-ink-pale/20 border-dashed border-t-0 border-l border-ink-pale/20'
+                            )}
+                            style={{ height: 'calc(100% + 4px)' }}
+                          />
+                        )}
+
+                        <div className="flex items-start gap-4 relative z-10">
+                          <div
+                            className={cn(
+                              'relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full mt-0.5',
+                              isCompleted && !isSkipped &&
+                                'bg-gradient-to-br from-rose-dark via-rose to-rose-light shadow-[0_2px_8px_rgba(209,148,152,0.35)]',
+                              isSkipped &&
+                                'border-2 border-ink-pale/30 bg-white',
+                              !isCompleted && !isSkipped && !isCurrent &&
+                                'border-2 border-ink-pale/30 bg-white',
+                              isCurrent &&
+                                'bg-amber shadow-[0_0_0_4px_rgba(251,191,36,0.2)] animate-pulse'
+                            )}
+                          >
+                            {isCompleted && !isSkipped && (
+                              <Check className="h-3 w-3 text-white" strokeWidth={3} />
+                            )}
+                          </div>
+
+                          <div className="flex flex-1 flex-col">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-center gap-2">
+                                <IconComp
+                                  className={cn(
+                                    'h-4 w-4 shrink-0',
+                                    isCompleted && !isSkipped && 'text-rose-dark',
+                                    isSkipped && 'text-ink-pale',
+                                    !isCompleted && !isSkipped && !isCurrent && 'text-ink-pale',
+                                    isCurrent && 'text-amber-dark'
+                                  )}
+                                  strokeWidth={2}
+                                />
+                                <span
+                                  className={cn(
+                                    'text-sm font-bold',
+                                    isCompleted && !isSkipped && 'text-ink',
+                                    isSkipped && 'text-ink-pale',
+                                    !isCompleted && !isSkipped && !isCurrent && 'text-ink-pale',
+                                    isCurrent && 'text-ink'
+                                  )}
+                                >
+                                  {node.title}
+                                </span>
+                              </div>
+                              <span
+                                className={cn(
+                                  'text-xs font-medium shrink-0 pt-0.5',
+                                  isCompleted && !isSkipped && 'text-mint-dark',
+                                  isSkipped && 'text-ink-pale',
+                                  !isCompleted && !isSkipped && !isCurrent && 'text-ink-pale',
+                                  isCurrent && 'text-amber-dark'
+                                )}
+                              >
+                                {formatTS(node.completedAt)}
+                              </span>
+                            </div>
+
+                            {isCompleted && !isSkipped && (
+                              <div className="mt-1 ml-6 flex items-center gap-1">
+                                <span className="text-[11px] font-medium text-mint-dark">完成</span>
+                                <CheckCircle2 className="h-3 w-3 text-mint-dark" strokeWidth={2.5} />
+                              </div>
+                            )}
+
+                            {isNurseReview && isCompleted && !isSkipped && record.nurseReview.reviewedItems.length > 0 && (
+                              <div className="mt-1.5 ml-6">
+                                <p className="text-[11px] font-medium text-mint-dark">
+                                  复核内容：{record.nurseReview.reviewedItems.join('，')}
+                                </p>
+                              </div>
+                            )}
+
+                            {isNurseReview && isSkipped && (
+                              <div className="mt-1 ml-6">
+                                <span className="text-[11px] font-medium text-ink-pale">
+                                  无需复核
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

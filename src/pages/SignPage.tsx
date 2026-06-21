@@ -326,15 +326,54 @@ export default function SignPage() {
                   </span>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-medium text-ink-pale">护士复核</span>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-medium text-ink-pale">护士复核</span>
+                  {nurseReview.reviewed ? (
+                    <div className="flex items-center gap-1.5 rounded-full bg-mint/30 px-3 py-1.5">
+                      <UserCheck className="h-4 w-4 text-mint-dark" strokeWidth={2.2} />
+                      <span className="text-sm font-bold text-mint-dark">已复核</span>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-ink-pale">无需复核</span>
+                  )}
+                </div>
                 {nurseReview.reviewed ? (
-                  <div className="flex items-center gap-1.5 rounded-full bg-mint/30 px-3 py-1.5">
-                    <UserCheck className="h-4 w-4 text-mint-dark" strokeWidth={2.2} />
-                    <span className="text-sm font-bold text-mint-dark">已复核</span>
+                  <div className="bg-mint/8 rounded-xl p-3 mt-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4.5 h-4.5 text-mint-dark" strokeWidth={2.5} />
+                        <span className="font-bold text-mint-dark text-sm">已复核</span>
+                      </div>
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-mint/20 text-[11px] font-bold text-mint-dark">
+                        {nurseReview.reviewedAt ? formatReviewedAt(nurseReview.reviewedAt) : '刚刚'}
+                      </span>
+                    </div>
+                    {nurseReview.reviewedItems.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2.5">
+                        {nurseReview.reviewedItems.map((item, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-1 rounded-[8px] bg-mint/15 text-mint-dark text-xs font-semibold"
+                          >
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  <span className="text-sm text-ink-pale">无需复核</span>
+                  <div className="mt-1.5 text-[11px] leading-snug">
+                    {specialConditions.some((c) => c.checked && c.needNurseReview) ? (
+                      <span className="text-amber-dark font-semibold">
+                        ⚠️ 待护士复核后完成
+                      </span>
+                    ) : (
+                      <span className="text-ink-pale">
+                        本次签署无特殊风险项
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

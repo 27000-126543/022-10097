@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
@@ -15,6 +15,10 @@ import {
   VolumeX,
   Eye,
   FileText,
+  Clock,
+  Filter,
+  RotateCcw,
+  X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -56,6 +60,31 @@ const tabList: { key: ConsentStatus; label: string; width: number }[] = [
   { key: 'completed', label: '已完成', width: 132 },
 ];
 
+type TimeRangeKey = 'all' | 'today' | 'last1h' | 'morning' | 'afternoon';
+
+const timeRangeOptions: { key: TimeRangeKey; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'today', label: '今天' },
+  { key: 'last1h', label: '近1小时' },
+  { key: 'morning', label: '上午' },
+  { key: 'afternoon', label: '下午' },
+];
+
+const statusFilterOptions: { key: ConsentStatus | 'all'; label: string }[] = [
+  { key: 'all', label: '全部状态' },
+  { key: 'pending_review', label: '待复核' },
+  { key: 'called', label: '已叫号' },
+  { key: 'completed', label: '已完成' },
+];
+
+const nurseReviewRiskLabels = [
+  '孕期或哺乳期',
+  '瘢痕体质',
+  '近期服药',
+  '过敏史',
+  '近期手术史',
+];
+
 function maskPhone(phone: string): string {
   if (phone.length < 7) return phone;
   return phone.slice(0, 3) + '****' + phone.slice(-4);
@@ -78,6 +107,44 @@ function formatDateTime(d: Date): string {
   const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
   const w = weekDays[d.getDay()];
   return `${y}年${m}月${day}日 周${w} ${hh}:${mm}`;
+}
+
+function isInTimeRange(iso: string | null, range: TimeRangeKey, now: Date): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+  switch (range) {
+    case 'all':
+      return true;
+    case 'today':
+      return d >= todayStart && d < todayEnd;
+    case 'last1h':
+      return d >= oneHourAgo && d <= now;
+    case 'morning':
+      return d >= todayStart && d < noon;
+    case 'afternoon':
+      return d >= noon && d <= now;
+    default:
+      return true;
+  }
+}
+
+function isUrgent(r: ConsentRecord): boolean {
+  if (r.status === 'pending_review') {
+    const mins = (Date.now() - new Date(r.submittedAt || 0).getTime()) / 60000;
+    if (mins > 30) return true;
+  }
+  const pregnancyLabels = ['孕期或哺乳期', '孕', '哺乳'];
+  if (r.checkedConditions.some((c) => pregnancyLabels.some((p) => c.label.includes(p)))) {
+    return true;
+  }
+  const needCount = r.checkedConditions.filter((c) => c.needNurseReview).length;
+  if (needCount >= 2) return true;
+  return false;
 }
 
 interface RecordCardProps {
@@ -455,6 +522,88 @@ function RecordCard({ record, index, onMarkComplete }: RecordCardProps) {
   );
 }
 
+interface DropdownOption {
+  key: string;
+  label: string;
+}
+
+interface DropdownProps {
+  label: string;
+  icon?: React.ReactNode;
+  value: string;
+  options: DropdownOption[];
+  onChange: (key: string) => void;
+}
+
+function Dropdown({ label, icon, value, options, onChange }: DropdownProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = options.find((o) => o.key === value);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <motion.button
+        whileTap={{ scale: 0.97 }}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'inline-flex items-center gap-2 h-10 px-4 rounded-full text-sm font-semibold',
+          'bg-white border border-rose-light/40 text-ink hover:bg-warmwhite transition-all shadow-card'
+        )}
+      >
+        {icon}
+        <span className="text-ink-pale font-medium">{label}</span>
+        <span className="text-ink">{selected?.label}</span>
+        <motion.div animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}>
+          <ChevronDown className="w-4 h-4 text-ink-pale" strokeWidth={2} />
+        </motion.div>
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.96 }}
+            transition={{ duration: 0.18, ease: [0.25, 0.8, 0.25, 1] }}
+            className="absolute top-full left-0 mt-2 min-w-[160px] bg-white rounded-2xl shadow-soft border border-rose-light/30 py-2 z-50 overflow-hidden"
+          >
+            {options.map((opt) => {
+              const active = opt.key === value;
+              return (
+                <motion.button
+                  key={opt.key}
+                  whileHover={{ backgroundColor: 'rgba(243, 209, 212, 0.3)' }}
+                  onClick={() => {
+                    onChange(opt.key);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    'w-full px-4 py-2.5 text-left text-sm font-medium transition-colors flex items-center justify-between gap-3',
+                    active ? 'text-rose-dark bg-rose-light/20' : 'text-ink-light hover:text-ink'
+                  )}
+                >
+                  <span>{opt.label}</span>
+                  {active && <CheckCircle2 className="w-4 h-4" strokeWidth={2.5} />}
+                </motion.button>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function NurseRecordsPage() {
   const navigate = useNavigate();
   const consentRecords = useSignFlowStore((s) => s.consentRecords);
@@ -463,6 +612,10 @@ export default function NurseRecordsPage() {
   const [now, setNow] = useState(new Date());
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState<ConsentStatus>('pending_review');
+
+  const [timeRange, setTimeRange] = useState<TimeRangeKey>('today');
+  const [statusFilter, setStatusFilter] = useState<ConsentStatus | 'all'>('all');
+  const [selectedRisks, setSelectedRisks] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60 * 1000);
@@ -480,9 +633,23 @@ export default function NurseRecordsPage() {
     [consentRecords]
   );
 
+  const effectiveStatusFilter = statusFilter === 'all' ? activeTab : statusFilter;
+
   const filteredRecords = useMemo(() => {
     const kw = searchText.trim().toLowerCase();
-    let list = consentRecords.filter((r) => r.status === activeTab);
+    let list = consentRecords.filter((r) => r.status === effectiveStatusFilter);
+
+    list = list.filter((r) => isInTimeRange(r.submittedAt, timeRange, now));
+
+    if (selectedRisks.size > 0) {
+      list = list.filter((r) => {
+        const nurseRisks = r.checkedConditions.filter((c) => c.needNurseReview);
+        return nurseRisks.some((c) =>
+          Array.from(selectedRisks).some((sel) => c.label.includes(sel) || sel.includes(c.label))
+        );
+      });
+    }
+
     if (kw) {
       list = list.filter(
         (r) =>
@@ -495,10 +662,37 @@ export default function NurseRecordsPage() {
       const tb = b.submittedAt ? new Date(b.submittedAt).getTime() : 0;
       return tb - ta;
     });
-  }, [consentRecords, activeTab, searchText]);
+  }, [consentRecords, effectiveStatusFilter, timeRange, selectedRisks, searchText, now]);
+
+  const urgentRecords = useMemo(
+    () => filteredRecords.filter(isUrgent),
+    [filteredRecords]
+  );
+  const laterRecords = useMemo(
+    () => filteredRecords.filter((r) => !isUrgent(r)),
+    [filteredRecords]
+  );
 
   const handleMarkComplete = (id: string) => {
     updateStatus(id, 'completed');
+  };
+
+  const handleResetFilters = () => {
+    setTimeRange('today');
+    setStatusFilter('all');
+    setSelectedRisks(new Set());
+  };
+
+  const toggleRisk = (label: string) => {
+    setSelectedRisks((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) {
+        next.delete(label);
+      } else {
+        next.add(label);
+      }
+      return next;
+    });
   };
 
   const activeIdx = tabList.findIndex((t) => t.key === activeTab);
@@ -506,6 +700,8 @@ export default function NurseRecordsPage() {
     .slice(0, activeIdx)
     .reduce((sum, t) => sum + t.width, 0);
   const indicatorWidth = tabList[activeIdx].width;
+
+  const shouldGroup = activeTab === 'pending_review' || activeTab === 'called';
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-gradient-to-br from-warmwhite via-white to-rose-light/10 flex flex-col">
@@ -566,7 +762,7 @@ export default function NurseRecordsPage() {
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.1 }}
-        className="shrink-0 px-6 xl:px-10 py-5"
+        className="shrink-0 px-6 xl:px-10 pt-5"
       >
         <div className="max-w-[1400px] mx-auto">
           <div className="relative inline-flex p-1.5 rounded-full bg-warmwhite border border-rose-light/30 shadow-card">
@@ -617,6 +813,97 @@ export default function NurseRecordsPage() {
         </div>
       </motion.div>
 
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.15 }}
+        className="shrink-0 px-6 xl:px-10 pt-4 pb-3"
+      >
+        <div className="max-w-[1400px] mx-auto">
+          <div className="flex flex-wrap items-center gap-3 bg-white/70 backdrop-blur-sm rounded-[28px] p-3 border border-rose-light/30 shadow-card">
+            <div className="flex items-center gap-2 px-2">
+              <Filter className="w-4 h-4 text-rose-dark" strokeWidth={2} />
+              <span className="text-sm font-semibold text-ink">筛选</span>
+            </div>
+
+            <Dropdown
+              label="时间段"
+              icon={<Clock className="w-4 h-4 text-amber-dark" strokeWidth={2} />}
+              value={timeRange}
+              options={timeRangeOptions}
+              onChange={(v) => setTimeRange(v as TimeRangeKey)}
+            />
+
+            <Dropdown
+              label="状态"
+              value={statusFilter}
+              options={statusFilterOptions}
+              onChange={(v) => setStatusFilter(v as ConsentStatus | 'all')}
+            />
+
+            <div className="h-6 w-px bg-ink-pale/20 mx-1" />
+
+            <div className="flex flex-wrap items-center gap-2">
+              <AnimatePresence mode="popLayout">
+                {nurseReviewRiskLabels.map((label) => {
+                  const active = selectedRisks.has(label);
+                  return (
+                    <motion.button
+                      key={label}
+                      layout
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      whileTap={{ scale: 0.94 }}
+                      onClick={() => toggleRisk(label)}
+                      className={cn(
+                        'relative inline-flex items-center gap-1.5 h-8 px-3.5 rounded-full text-xs font-bold transition-all duration-200',
+                        active
+                          ? 'bg-amber text-white shadow-soft shadow-amber/30'
+                          : 'bg-warmwhite text-ink-pale border border-ink-pale/15 hover:border-rose-light/50 hover:text-ink-light'
+                      )}
+                    >
+                      <span>{label}</span>
+                      {active && (
+                        <motion.span
+                          initial={{ opacity: 0, scale: 0, rotate: -90 }}
+                          animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                          exit={{ opacity: 0, scale: 0, rotate: 90 }}
+                          className="inline-flex items-center justify-center"
+                        >
+                          <X className="w-3 h-3" strokeWidth={2.5} />
+                        </motion.span>
+                      )}
+                    </motion.button>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
+
+            <div className="flex-1" />
+
+            <motion.button
+              whileTap={{ scale: 0.94 }}
+              whileHover={{ x: -2 }}
+              onClick={handleResetFilters}
+              className={cn(
+                'inline-flex items-center gap-1.5 h-10 px-5 rounded-full text-sm font-bold transition-all',
+                'bg-warmwhite border border-rose-light/40 text-ink-light hover:bg-rose-light/40 hover:text-rose-dark shadow-card'
+              )}
+            >
+              <motion.div
+                animate={{ rotate: selectedRisks.size > 0 || timeRange !== 'today' || statusFilter !== 'all' ? 360 : 0 }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+                key={`${selectedRisks.size}-${timeRange}-${statusFilter}`}
+              >
+                <RotateCcw className="w-4 h-4" strokeWidth={2} />
+              </motion.div>
+              重置筛选
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+
       <main className="flex-1 min-h-0 overflow-y-auto px-6 xl:px-10 pb-8">
         <div className="max-w-[1400px] mx-auto">
           <AnimatePresence mode="wait">
@@ -627,16 +914,130 @@ export default function NurseRecordsPage() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.25 }}
-                className="space-y-4 xl:space-y-5"
+                className="space-y-5"
               >
-                {filteredRecords.map((record, i) => (
-                  <RecordCard
-                    key={record.id}
-                    record={record}
-                    index={i}
-                    onMarkComplete={handleMarkComplete}
-                  />
-                ))}
+                {shouldGroup ? (
+                  <>
+                    <motion.div
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.35, ease: 'easeOut' }}
+                      className="overflow-hidden rounded-[20px] bg-gradient-to-br from-rose via-rose-dark to-rose-light/80 shadow-card"
+                    >
+                      <div className="px-6 py-5 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center justify-center w-12 h-12 rounded-full bg-white/25 backdrop-blur-sm">
+                            <AlertTriangle className="w-6 h-6 text-white" strokeWidth={2.2} />
+                          </div>
+                          <div>
+                            <h2 className="text-2xl font-black text-white drop-shadow-sm tracking-wide">
+                              🔴 马上处理
+                            </h2>
+                            <p className="text-white/80 text-xs mt-0.5 font-medium">
+                              pending超过30分钟 · 孕期/哺乳期 · 2项以上风险叠加
+                            </p>
+                          </div>
+                        </div>
+                        <motion.div
+                          key={urgentRecords.length}
+                          initial={{ scale: 0.5, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ type: 'spring', stiffness: 400, damping: 18 }}
+                          className="flex items-center justify-center min-w-[60px] h-[60px] rounded-full bg-white text-rose-dark shadow-soft"
+                        >
+                          <span className="text-3xl font-black">{urgentRecords.length}</span>
+                          <span className="text-xs font-bold ml-0.5 -mt-2">位</span>
+                        </motion.div>
+                      </div>
+                      {urgentRecords.length > 0 ? (
+                        <div className="bg-white/95 backdrop-blur-sm px-5 pb-5 pt-2 border-t border-white/30">
+                          <div className="space-y-4">
+                            {urgentRecords.map((record, i) => (
+                              <RecordCard
+                                key={record.id}
+                                record={record}
+                                index={i}
+                                onMarkComplete={handleMarkComplete}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-white/95 backdrop-blur-sm px-5 py-6 border-t border-white/30">
+                          <div className="flex items-center justify-center gap-2 text-ink-pale py-4">
+                            <CheckCircle2 className="w-5 h-5 text-mint-dark" strokeWidth={2.2} />
+                            <span className="text-sm font-semibold">暂无紧急处理项，状态良好</span>
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+
+                    <motion.div
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.35, delay: 0.1, ease: 'easeOut' }}
+                      className="overflow-hidden rounded-[20px] bg-gradient-to-br from-amber via-amber-dark to-amber/80 shadow-card"
+                    >
+                      <div className="px-6 py-5 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center justify-center w-12 h-12 rounded-full bg-white/25 backdrop-blur-sm">
+                            <Clock className="w-6 h-6 text-white" strokeWidth={2.2} />
+                          </div>
+                          <div>
+                            <h2 className="text-2xl font-black text-white drop-shadow-sm tracking-wide">
+                              🟡 可稍后处理
+                            </h2>
+                            <p className="text-white/80 text-xs mt-0.5 font-medium">
+                              其余待复核 / 已叫号记录
+                            </p>
+                          </div>
+                        </div>
+                        <motion.div
+                          key={laterRecords.length}
+                          initial={{ scale: 0.5, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ type: 'spring', stiffness: 400, damping: 18, delay: 0.05 }}
+                          className="flex items-center justify-center min-w-[60px] h-[60px] rounded-full bg-white text-amber-dark shadow-soft"
+                        >
+                          <span className="text-3xl font-black">{laterRecords.length}</span>
+                          <span className="text-xs font-bold ml-0.5 -mt-2">位</span>
+                        </motion.div>
+                      </div>
+                      {laterRecords.length > 0 ? (
+                        <div className="bg-white/95 backdrop-blur-sm px-5 pb-5 pt-2 border-t border-white/30">
+                          <div className="space-y-4">
+                            {laterRecords.map((record, i) => (
+                              <RecordCard
+                                key={record.id}
+                                record={record}
+                                index={i}
+                                onMarkComplete={handleMarkComplete}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-white/95 backdrop-blur-sm px-5 py-6 border-t border-white/30">
+                          <div className="flex items-center justify-center gap-2 text-ink-pale py-4">
+                            <CheckCircle2 className="w-5 h-5 text-mint-dark" strokeWidth={2.2} />
+                            <span className="text-sm font-semibold">暂无待处理项</span>
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  </>
+                ) : (
+                  <div className="space-y-4 xl:space-y-5">
+                    {filteredRecords.map((record, i) => (
+                      <RecordCard
+                        key={record.id}
+                        record={record}
+                        index={i}
+                        onMarkComplete={handleMarkComplete}
+                      />
+                    ))}
+                  </div>
+                )}
               </motion.div>
             ) : (
               <motion.div
@@ -655,12 +1056,14 @@ export default function NurseRecordsPage() {
                     />
                   </div>
                   <h3 className="text-xl font-bold text-ink mb-2">
-                    今日暂无签署记录
+                    暂无匹配的签署记录
                   </h3>
                   <p className="text-ink-light text-sm">
                     {searchText
                       ? '未找到匹配的签署记录，请尝试其他关键词'
-                      : `${statusConfig[activeTab].label}状态下暂无数据`}
+                      : selectedRisks.size > 0 || timeRange !== 'today' || statusFilter !== 'all'
+                      ? '当前筛选条件下无数据，试试重置筛选'
+                      : `${statusConfig[effectiveStatusFilter as ConsentStatus].label}状态下暂无数据`}
                   </p>
                 </div>
               </motion.div>

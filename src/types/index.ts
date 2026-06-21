@@ -56,6 +56,23 @@ export type SignMethod = "handwrite" | "photo" | "sms" | null;
 
 export type ConsentStatus = 'pending_review' | 'called' | 'completed';
 
+export type TimelineNodeKey =
+  | 'query_appointment'
+  | 'read_risks'
+  | 'answer_qa'
+  | 'nurse_review'
+  | 'submit_signature';
+
+export interface ConsentTimelineNode {
+  key: TimelineNodeKey;
+  title: string;
+  iconName: string;
+  completedAt: string | null;
+  skipped?: boolean;
+}
+
+export type TimelineNode = ConsentTimelineNode;
+
 export interface ConsentRecord {
   id: string;
   createdAt: string;
@@ -88,6 +105,8 @@ export interface ConsentRecord {
   voiceCompleted: boolean;
 
   submittedAt: string | null;
+
+  timeline: ConsentTimelineNode[];
 }
 
 export interface NurseReview {
@@ -113,4 +132,10 @@ export interface SignFlowState {
   nurseReview: NurseReview;
   confirmedSignMethod: SignMethod;
   consentRecords: ConsentRecord[];
+  timelineDraft: {
+    queryAt: string | null;
+    allRisksReadAt: string | null;
+    qaCompletedAt: string | null;
+    nurseReviewedAt: string | null;
+  };
 }
