@@ -9,7 +9,7 @@ import CapsuleButton from '@/components/ui/CapsuleButton';
 
 export default function TodaySignPage() {
   const navigate = useNavigate();
-  const { phone, setPhone, appointment, queryAppointment } = useSignFlowStore();
+  const { phone, setPhone, appointment, setAppointment, queryAppointment } = useSignFlowStore();
   const [hasQueried, setHasQueried] = useState(false);
 
   const formatDate = () => {
@@ -24,7 +24,13 @@ export default function TodaySignPage() {
 
   const [todayDate] = useState(formatDate);
 
+  const handlePhoneChange = (value: string) => {
+    setPhone(value);
+    setHasQueried(false);
+  };
+
   const handleQuery = () => {
+    setAppointment(null);
     queryAppointment();
     setHasQueried(true);
   };
@@ -76,7 +82,7 @@ export default function TodaySignPage() {
 
           <PhoneInput
             value={phone}
-            onChange={setPhone}
+            onChange={handlePhoneChange}
             onConfirm={handleQuery}
           />
 

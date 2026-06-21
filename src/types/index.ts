@@ -54,6 +54,12 @@ export interface FAQItem {
 
 export type SignMethod = "handwrite" | "photo" | "sms" | null;
 
+export interface NurseReview {
+  reviewed: boolean;
+  reviewedAt: string | null;
+  reviewedItems: string[];
+}
+
 export interface SignFlowState {
   phone: string;
   appointment: Appointment | null;
@@ -61,8 +67,13 @@ export interface SignFlowState {
   specialConditions: SpecialCondition[];
   voiceCompleted: boolean;
   signMethod: SignMethod;
-  signData: string | null;
+  handwriteData: string | null;
+  photoData: string | null;
   smsVerified: boolean;
+  smsCode: string | null;
+  smsExpiredAt: number | null;
   completed: boolean;
   queueNumber: string;
+  nurseReview: NurseReview;
+  confirmedSignMethod: SignMethod;
 }

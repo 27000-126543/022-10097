@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -14,6 +14,9 @@ import {
   CheckCircle2,
   Users,
   Clock,
+  UserCheck,
+  Eye,
+  Stethoscope,
 } from 'lucide-react'
 import { useSignFlowStore } from '@/store/signFlowStore'
 import PageHeader from '@/components/ui/PageHeader'
@@ -22,7 +25,7 @@ import VoicePlayer from '@/components/VoicePlayer'
 import HandwritePad from '@/components/HandwritePad'
 import PhotoUploader from '@/components/PhotoUploader'
 import SMSVerify from '@/components/SMSVerify'
-import { cn } from '@/lib/utils'
+import { cn, maskPhone } from '@/lib/utils'
 import type { SignMethod } from '@/types'
 
 const TABS: { key: Exclude<SignMethod, null>; label: string; icon: typeof PenLine }[] = [
@@ -30,6 +33,10 @@ const TABS: { key: Exclude<SignMethod, null>; label: string; icon: typeof PenLin
   { key: 'photo', label: '拍照确认', icon: Camera },
   { key: 'sms', label: '短信验证码', icon: MessageSquare },
 ]
+
+const LONG_PRESS_DURATION = 2000
+const PROGRESS_RADIUS = 22
+const PROGRESS_CIRCUMFERENCE = 2 * Math.PI * PROGRESS_RADIUS
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -52,6 +59,39 @@ const itemVariants = {
   },
 }
 
+function formatReviewedAt(ts: string | null): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function getSignMethodLabel(method: SignMethod, phone: string): string {
+  switch (method) {
+    case 'handwrite':
+      return '手写签名'
+    case 'photo':
+      return '照片确认'
+    case 'sms':
+      return `短信验证(手机${maskPhone(phone)})`
+    default:
+      return '待选择'
+  }
+}
+
+function getSignMethodIcon(method: SignMethod): typeof PenLine {
+  switch (method) {
+    case 'handwrite':
+      return PenLine
+    case 'photo':
+      return Camera
+    case 'sms':
+      return MessageSquare
+    default:
+      return PenLine
+  }
+}
+
 export default function SignPage() {
   const navigate = useNavigate()
   const {
@@ -60,17 +100,25 @@ export default function SignPage() {
     setVoiceCompleted,
     signMethod,
     setSignMethod,
-    signData,
-    setSignData,
+    handwriteData,
+    setHandwriteData,
+    photoData,
+    setPhotoData,
     smsVerified,
     setSmsVerified,
+    smsExpiredAt,
+    setSmsCode,
+    setSmsExpiredAt,
     phone,
     understoodRisks,
     specialConditions,
+    nurseReview,
+    confirmedSignMethod,
     canProceedToSign,
     completeFlow,
     completed,
     queueNumber,
+    resetFlow,
   } = useSignFlowStore()
 
   const confirmedSpecialCount = useMemo(
@@ -80,6 +128,11 @@ export default function SignPage() {
 
   const randomAhead = useMemo(() => Math.floor(Math.random() * 6) + 2, [])
   const randomWait = useMemo(() => Math.floor(Math.random() * 15) + 10, [])
+
+  const longPressTimerRef = useRef<number | null>(null)
+  const [longPressProgress, setLongPressProgress] = useState(0)
+  const progressAnimRef = useRef<number | null>(null)
+  const pressStartRef = useRef<number>(0)
 
   useEffect(() => {
     if (!appointment) {
@@ -95,15 +148,61 @@ export default function SignPage() {
     setSignMethod(method)
   }
 
+  const handleSmsVerified = (code: string, expiredAt: number) => {
+    setSmsCode(code)
+    setSmsExpiredAt(expiredAt)
+    setSmsVerified(true)
+  }
+
   const handleSubmit = () => {
     if (canProceedToSign()) {
       completeFlow()
     }
   }
 
+  const clearLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+    if (progressAnimRef.current !== null) {
+      cancelAnimationFrame(progressAnimRef.current)
+      progressAnimRef.current = null
+    }
+    setLongPressProgress(0)
+  }
+
+  const tickProgress = () => {
+    const elapsed = Date.now() - pressStartRef.current
+    const ratio = Math.min(elapsed / LONG_PRESS_DURATION, 1)
+    setLongPressProgress(ratio)
+    if (ratio < 1) {
+      progressAnimRef.current = requestAnimationFrame(tickProgress)
+    }
+  }
+
+  const handleResetPressStart = () => {
+    clearLongPress()
+    pressStartRef.current = Date.now()
+    progressAnimRef.current = requestAnimationFrame(tickProgress)
+    longPressTimerRef.current = window.setTimeout(() => {
+      clearLongPress()
+      resetFlow()
+      navigate('/', { replace: true })
+    }, LONG_PRESS_DURATION)
+  }
+
+  const handleResetPressEnd = () => {
+    clearLongPress()
+  }
+
   if (!appointment) return null
 
   if (completed) {
+    const displaySignMethod = confirmedSignMethod ?? signMethod
+    const SignIcon = getSignMethodIcon(displaySignMethod)
+    const signLabel = getSignMethodLabel(displaySignMethod, phone)
+
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -157,7 +256,7 @@ export default function SignPage() {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ type: 'spring', stiffness: 240, damping: 20, delay: 0.8 }}
-            className="relative mb-8"
+            className="relative mb-6"
           >
             <div className="absolute -inset-2 rounded-full bg-mint/20 animate-pulse-soft" />
             <div className="relative rounded-full border-2 border-dashed border-mint-dark/40 bg-mint/10 px-10 py-5">
@@ -170,8 +269,8 @@ export default function SignPage() {
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 1, duration: 0.4 }}
-            className="flex w-full flex-col gap-3 rounded-2xl bg-warmwhite p-5"
+            transition={{ delay: 0.95, duration: 0.4 }}
+            className="mb-5 flex w-full flex-col gap-3 rounded-2xl bg-warmwhite p-5"
           >
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-light/40">
@@ -194,10 +293,121 @@ export default function SignPage() {
               </span>
             </div>
           </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 1.1, duration: 0.4 }}
+            className="w-full rounded-2xl bg-white border border-ink-pale/10 p-5 shadow-[0_4px_16px_rgba(139,109,113,0.06)]"
+          >
+            <div className="mb-4 flex items-center gap-2">
+              <div className="h-1.5 w-6 rounded-full bg-gradient-to-r from-rose to-rose-light" />
+              <span className="text-sm font-bold text-ink">本次签署确认</span>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-ink-pale">项目名</span>
+                <span className="text-sm font-semibold text-ink text-right truncate max-w-[60%]">
+                  {appointment.projectName}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-ink-pale">确认方式</span>
+                <div className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-rose-light/60 to-rose/50 px-3 py-1.5">
+                  <SignIcon className="h-4.5 w-4.5 text-rose-dark" strokeWidth={2.2} />
+                  <span className="text-sm font-bold text-rose-dark">
+                    {displaySignMethod ? signLabel : '待选择'}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-medium text-ink-pale">护士复核</span>
+                {nurseReview.reviewed ? (
+                  <div className="flex items-center gap-1.5 rounded-full bg-mint/30 px-3 py-1.5">
+                    <UserCheck className="h-4 w-4 text-mint-dark" strokeWidth={2.2} />
+                    <span className="text-sm font-bold text-mint-dark">已复核</span>
+                  </div>
+                ) : (
+                  <span className="text-sm text-ink-pale">无需复核</span>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 1.4, duration: 0.4 }}
+          className="fixed bottom-6 right-6 z-50 flex items-end gap-3"
+        >
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-1.5 rounded-full bg-ink-pale/20 px-3 py-1.5">
+              <Stethoscope className="h-3.5 w-3.5 text-ink-light" strokeWidth={2} />
+              <span className="text-xs font-medium text-ink-light">护士操作区</span>
+            </div>
+            <div
+              className="relative flex items-center justify-center select-none"
+              onMouseDown={handleResetPressStart}
+              onMouseUp={handleResetPressEnd}
+              onMouseLeave={handleResetPressEnd}
+              onTouchStart={(e) => {
+                e.preventDefault()
+                handleResetPressStart()
+              }}
+              onTouchEnd={handleResetPressEnd}
+              onTouchCancel={handleResetPressEnd}
+            >
+              <svg className="absolute h-16 w-16" viewBox="0 0 56 56">
+                <circle
+                  cx="28"
+                  cy="28"
+                  r={PROGRESS_RADIUS}
+                  fill="none"
+                  stroke="rgba(139,109,113,0.1)"
+                  strokeWidth="4"
+                />
+                <circle
+                  cx="28"
+                  cy="28"
+                  r={PROGRESS_RADIUS}
+                  fill="none"
+                  stroke="url(#resetProgressGradient)"
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                  strokeDasharray={PROGRESS_CIRCUMFERENCE}
+                  strokeDashoffset={PROGRESS_CIRCUMFERENCE * (1 - longPressProgress)}
+                  transform="rotate(-90 28 28)"
+                  style={{ transition: longPressProgress === 0 ? 'stroke-dashoffset 0.2s ease-out' : 'none' }}
+                />
+                <defs>
+                  <linearGradient id="resetProgressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#d19498" />
+                    <stop offset="100%" stopColor="#e8b4b8" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <button
+                type="button"
+                className={cn(
+                  'relative z-10 flex h-14 w-14 items-center justify-center rounded-full text-xs font-medium transition-all duration-200',
+                  longPressProgress > 0
+                    ? 'bg-gradient-to-br from-rose to-rose-light text-white shadow-soft scale-95'
+                    : 'bg-ink-pale/30 text-ink-light hover:bg-ink-pale/40'
+                )}
+              >
+                <span className="leading-tight text-center px-1">
+                  重置给<br />下一位
+                </span>
+              </button>
+            </div>
+          </div>
         </motion.div>
       </motion.div>
     )
   }
+
+  const SummaryIcon = getSignMethodIcon(signMethod)
 
   return (
     <div className="flex h-screen w-full flex-col bg-warmwhite">
@@ -290,6 +500,24 @@ export default function SignPage() {
                     iconBg: 'bg-violet-100',
                     iconColor: 'text-violet-600',
                   },
+                  {
+                    icon: UserCheck,
+                    label: '护士复核',
+                    value: nurseReview.reviewed
+                      ? `已复核 · ${nurseReview.reviewedItems.length}项 · ${formatReviewedAt(nurseReview.reviewedAt)}`
+                      : '无需复核',
+                    color: 'from-mint to-mint-dark',
+                    iconBg: nurseReview.reviewed ? 'bg-mint/30' : 'bg-ink-pale/20',
+                    iconColor: nurseReview.reviewed ? 'text-mint-dark' : 'text-ink-pale',
+                  },
+                  {
+                    icon: SummaryIcon,
+                    label: '确认方式',
+                    value: getSignMethodLabel(signMethod, phone),
+                    color: 'from-rose to-rose-light',
+                    iconBg: signMethod ? 'bg-rose-light/40' : 'bg-ink-pale/20',
+                    iconColor: signMethod ? 'text-rose-dark' : 'text-ink-pale',
+                  },
                 ].map((item, idx) => (
                   <motion.div
                     key={item.label}
@@ -376,9 +604,9 @@ export default function SignPage() {
                     transition={{ type: 'spring', stiffness: 260, damping: 24 }}
                   >
                     <HandwritePad
-                      value={signData ?? undefined}
-                      onSave={(data) => setSignData(data)}
-                      onClear={() => setSignData(null)}
+                      value={handwriteData ?? undefined}
+                      onSave={(data) => setHandwriteData(data)}
+                      onClear={() => setHandwriteData(null)}
                     />
                   </motion.div>
                 )}
@@ -392,8 +620,8 @@ export default function SignPage() {
                     transition={{ type: 'spring', stiffness: 260, damping: 24 }}
                   >
                     <PhotoUploader
-                      value={signData ?? undefined}
-                      onSave={(data) => setSignData(data)}
+                      value={photoData ?? undefined}
+                      onSave={(data) => setPhotoData(data)}
                     />
                   </motion.div>
                 )}
@@ -406,10 +634,17 @@ export default function SignPage() {
                     exit={{ opacity: 0, x: 20, scale: 0.98 }}
                     transition={{ type: 'spring', stiffness: 260, damping: 24 }}
                   >
+                    <div className="mb-4 flex items-center gap-2 rounded-xl bg-ink-pale/10 px-3.5 py-2.5">
+                      <Eye className="h-3.5 w-3.5 text-ink-pale shrink-0" strokeWidth={2} />
+                      <span className="text-xs text-ink-pale leading-snug">
+                        护士提示：演示环境可使用测试码 888888
+                      </span>
+                    </div>
                     <SMSVerify
                       phone={phone}
                       verified={smsVerified}
-                      onVerified={() => setSmsVerified(true)}
+                      smsExpiredAt={smsExpiredAt}
+                      onVerified={handleSmsVerified}
                     />
                   </motion.div>
                 )}

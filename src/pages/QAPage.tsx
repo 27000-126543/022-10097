@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { HelpCircle, UserCheck, AlertTriangle } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { HelpCircle, UserCheck, AlertTriangle, X, CheckCircle2, ShieldCheck } from 'lucide-react'
 import PageHeader from '@/components/ui/PageHeader'
 import CapsuleButton from '@/components/ui/CapsuleButton'
 import SpecialConditionList from '@/components/SpecialConditionList'
 import FAQAccordion from '@/components/FAQAccordion'
 import { faqItems } from '@/data/mockFAQs'
 import { useSignFlowStore } from '@/store/signFlowStore'
+import { cn } from '@/lib/utils'
 
 export default function QAPage() {
   const navigate = useNavigate()
@@ -15,8 +16,12 @@ export default function QAPage() {
   const conditions = useSignFlowStore((s) => s.specialConditions)
   const toggleSpecialCondition = useSignFlowStore((s) => s.toggleSpecialCondition)
   const hasCheckedSpecialCondition = useSignFlowStore((s) => s.hasCheckedSpecialCondition)
+  const setNurseReview = useSignFlowStore((s) => s.setNurseReview)
 
   const [nurseConfirmed, setNurseConfirmed] = useState(false)
+  const [showModal, setShowModal] = useState(false)
+  const [nurseId, setNurseId] = useState('')
+  const [nurseIdVerified, setNurseIdVerified] = useState(false)
 
   useEffect(() => {
     if (!appointment) {
@@ -24,12 +29,46 @@ export default function QAPage() {
     }
   }, [appointment, navigate])
 
+  useEffect(() => {
+    if (!showModal) {
+      setNurseId('')
+      setNurseIdVerified(false)
+    }
+  }, [showModal])
+
   const handleBack = () => {
     navigate(-1)
   }
 
-  const handleNurseConfirm = () => {
+  const handleCallNurse = () => {
+    setShowModal(true)
+  }
+
+  const handleCloseModal = () => {
+    setShowModal(false)
+  }
+
+  const handleNurseIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.replace(/\D/g, '').slice(0, 4)
+    setNurseId(val)
+    if (nurseIdVerified) {
+      setNurseIdVerified(false)
+    }
+  }
+
+  const handleVerifyNurseId = () => {
+    if (nurseId.length === 4) {
+      setNurseIdVerified(true)
+    }
+  }
+
+  const handleConfirmReview = () => {
+    const reviewedItems = conditions
+      .filter((c) => c.checked && c.needNurseReview)
+      .map((c) => c.label)
+    setNurseReview(reviewedItems)
     setNurseConfirmed(true)
+    setShowModal(false)
   }
 
   const handleSign = () => {
@@ -39,6 +78,7 @@ export default function QAPage() {
   const hasAnyChecked = conditions.some((c) => c.checked)
   const needNurse = hasCheckedSpecialCondition()
   const canProceed = hasAnyChecked && (!needNurse || nurseConfirmed)
+  const nurseReviewItems = conditions.filter((c) => c.checked && c.needNurseReview)
 
   if (!appointment) return null
 
@@ -94,12 +134,12 @@ export default function QAPage() {
                     <p className="font-semibold text-amber-dark">
                       {nurseConfirmed
                         ? '已与护士确认完毕'
-                        : '已为您呼叫护士，请稍候'}
+                        : '需护士当面复核'}
                     </p>
                     <p className="mt-1 text-sm text-amber-dark/80">
                       {nurseConfirmed
                         ? '护士已复核您的特殊情况，可以继续签署流程'
-                        : '因您勾选了需要护士复核的项目，护士将很快过来与您当面沟通'}
+                        : '因您勾选了需要护士复核的项目，请呼叫护士进行当面确认'}
                     </p>
                   </div>
                 </div>
@@ -108,10 +148,10 @@ export default function QAPage() {
                   <CapsuleButton
                     variant="danger"
                     size="md"
-                    onClick={handleNurseConfirm}
+                    onClick={handleCallNurse}
                     icon={UserCheck}
                   >
-                    我已与护士确认，继续签署
+                    呼叫护士复核
                   </CapsuleButton>
                 )}
               </motion.div>
@@ -149,6 +189,139 @@ export default function QAPage() {
           )}
         </div>
       </footer>
+
+      <AnimatePresence>
+        {showModal && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm"
+              onClick={handleCloseModal}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
+              className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 px-4"
+            >
+              <div className="relative overflow-hidden rounded-3xl bg-white shadow-soft">
+                <div className="bg-gradient-to-r from-rose-dark via-rose to-rose-light px-6 py-5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20">
+                        <ShieldCheck className="h-5 w-5 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-white">护士复核确认</h3>
+                        <p className="text-xs text-white/80">请护士当面完成复核流程</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleCloseModal}
+                      className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white/90 transition-all hover:bg-white/25 hover:text-white"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="px-6 py-5">
+                  <div className="mb-4 flex items-center gap-2 rounded-xl bg-rose-light/20 px-4 py-3">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-rose-dark" />
+                    <p className="text-sm font-medium text-rose-dark">
+                      请护士当面复核以下勾选项目
+                    </p>
+                  </div>
+
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                    {nurseReviewItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-start gap-3 rounded-2xl border border-ink-pale/15 bg-warmwhite/50 p-3.5"
+                      >
+                        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-mint/30">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-mint-dark" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-ink">{item.label}</span>
+                            {item.needNurseReview && (
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-dark" />
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-xs text-ink-light">{item.description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-6 space-y-3.5">
+                    <div className="rounded-2xl border border-ink-pale/20 bg-gray-50/50 p-4">
+                      <div className="mb-2.5 flex items-center gap-2">
+                        <UserCheck className="h-4 w-4 text-ink-light" />
+                        <span className="text-sm font-medium text-ink">护士身份校验</span>
+                      </div>
+                      <div className="flex gap-2.5">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={4}
+                          value={nurseId}
+                          onChange={handleNurseIdChange}
+                          disabled={nurseIdVerified}
+                          placeholder="请输入4位护士工号"
+                          className={cn(
+                            'flex-1 h-11 rounded-xl border-2 px-4 text-sm font-medium tracking-widest text-center outline-none transition-all',
+                            nurseIdVerified
+                              ? 'border-mint-dark bg-mint/15 text-mint-dark'
+                              : 'border-ink-pale/20 bg-white focus:border-rose focus:ring-2 focus:ring-rose/20'
+                          )}
+                        />
+                        <CapsuleButton
+                          variant={nurseIdVerified ? 'primary' : 'secondary'}
+                          size="md"
+                          onClick={handleVerifyNurseId}
+                          disabled={nurseId.length !== 4 || nurseIdVerified}
+                          icon={nurseIdVerified ? CheckCircle2 : ShieldCheck}
+                          className="!h-11 !px-5"
+                        >
+                          {nurseIdVerified ? '已验证' : '确定'}
+                        </CapsuleButton>
+                      </div>
+                      <p className="mt-2 text-xs text-ink-light">
+                        护士工号：演示环境任意4位数字即可
+                      </p>
+                    </div>
+
+                    {nurseIdVerified && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <CapsuleButton
+                          variant="primary"
+                          size="lg"
+                          fullWidth
+                          onClick={handleConfirmReview}
+                          icon={UserCheck}
+                          className="bg-gradient-to-r from-mint-dark via-mint to-mint-dark !shadow-soft hover:!shadow-pressed"
+                        >
+                          确认复核完毕
+                        </CapsuleButton>
+                      </motion.div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

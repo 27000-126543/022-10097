@@ -1,30 +1,51 @@
 import { useState, useEffect, useRef, ChangeEvent, KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
-import { CheckCircle, Send, RefreshCw } from 'lucide-react'
+import { CheckCircle, Send, RefreshCw, Eye, EyeOff, Lock, AlertTriangle, Clock } from 'lucide-react'
 
 interface SMSVerifyProps {
   phone: string
-  onVerified: () => void
   verified: boolean
+  onVerified: (code: string, expiredAt: number) => void
+  smsExpiredAt?: number | null
 }
 
 const CODE_LENGTH = 6
 const COUNTDOWN_SECONDS = 60
+const CODE_EXPIRE_MINUTES = 5
+const TEST_CODE = '888888'
+const LOCK_DURATION_MS = 60 * 1000
+const MAX_ATTEMPTS = 3
 
 function maskPhone(phone: string): string {
   if (phone.length < 7) return phone
   return phone.slice(0, 3) + '****' + phone.slice(-4)
 }
 
-export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProps) {
+function generateRandomCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString()
+}
+
+type StatusType = 'idle' | 'sent' | 'success' | 'error' | 'locked' | 'expired'
+
+export default function SMSVerify({ phone, onVerified, verified, smsExpiredAt }: SMSVerifyProps) {
   const [codes, setCodes] = useState<string[]>(Array(CODE_LENGTH).fill(''))
   const [countdown, setCountdown] = useState(0)
   const [sent, setSent] = useState(false)
+  const [sentAt, setSentAt] = useState<number | null>(null)
+  const [generatedCode, setGeneratedCode] = useState<string>('')
+  const [errorMsg, setErrorMsg] = useState<string>('')
+  const [attempts, setAttempts] = useState(0)
+  const [lockUntil, setLockUntil] = useState<number | null>(null)
+  const [showTestCode, setShowTestCode] = useState(true)
+  const [status, setStatus] = useState<StatusType>('idle')
   const inputRefs = useRef<(HTMLInputElement | null)[]>([])
+
+  const codeExpiredAt = smsExpiredAt ?? (sentAt ? sentAt + CODE_EXPIRE_MINUTES * 60 * 1000 : null)
 
   useEffect(() => {
     if (verified) {
       setSent(true)
+      setStatus('success')
     }
   }, [verified])
 
@@ -46,10 +67,57 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
     }
   }, [countdown])
 
+  useEffect(() => {
+    if (!sent || !codeExpiredAt || verified) return
+    const checkTimer = window.setInterval(() => {
+      if (Date.now() > codeExpiredAt) {
+        setStatus('expired')
+        setErrorMsg('验证码已过期，请重新获取')
+        clearInterval(checkTimer)
+      }
+    }, 1000)
+    return () => clearInterval(checkTimer)
+  }, [sent, codeExpiredAt, verified])
+
+  useEffect(() => {
+    if (!lockUntil) return
+    if (Date.now() >= lockUntil) {
+      setLockUntil(null)
+      setAttempts(0)
+      setStatus(sent ? 'sent' : 'idle')
+      setErrorMsg('')
+      return
+    }
+    const timer = window.setInterval(() => {
+      if (Date.now() >= lockUntil) {
+        setLockUntil(null)
+        setAttempts(0)
+        setStatus(sent ? 'sent' : 'idle')
+        setErrorMsg('')
+        clearInterval(timer)
+      }
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [lockUntil, sent])
+
+  const isLocked = lockUntil !== null && Date.now() < lockUntil
+  const isCodeExpired = codeExpiredAt !== null && Date.now() > codeExpiredAt && !verified
+
+  const getLockRemaining = () => {
+    if (!lockUntil) return 0
+    return Math.max(0, Math.ceil((lockUntil - Date.now()) / 1000))
+  }
+
   const handleSendCode = () => {
-    if (countdown > 0 || verified) return
+    if (countdown > 0 || verified || isLocked) return
+    const newCode = generateRandomCode()
+    setGeneratedCode(newCode)
     setSent(true)
+    setSentAt(Date.now())
     setCountdown(COUNTDOWN_SECONDS)
+    setCodes(Array(CODE_LENGTH).fill(''))
+    setErrorMsg('')
+    setStatus('sent')
     setTimeout(() => {
       if (inputRefs.current[0]) {
         inputRefs.current[0].focus()
@@ -57,8 +125,38 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
     }, 100)
   }
 
+  const validateCode = (inputCode: string) => {
+    if (isCodeExpired) {
+      setStatus('expired')
+      setErrorMsg('验证码已过期，请重新获取')
+      setCodes(Array(CODE_LENGTH).fill(''))
+      return
+    }
+
+    if (inputCode === generatedCode || inputCode === TEST_CODE) {
+      setStatus('success')
+      setErrorMsg('')
+      onVerified(inputCode, Date.now() + CODE_EXPIRE_MINUTES * 60 * 1000)
+    } else {
+      const newAttempts = attempts + 1
+      setAttempts(newAttempts)
+      if (newAttempts >= MAX_ATTEMPTS) {
+        setLockUntil(Date.now() + LOCK_DURATION_MS)
+        setStatus('locked')
+        setErrorMsg('错误次数过多，请1分钟后重试')
+      } else {
+        setStatus('error')
+        setErrorMsg(`验证码错误（${newAttempts}/${MAX_ATTEMPTS}）`)
+      }
+      setTimeout(() => {
+        setCodes(Array(CODE_LENGTH).fill(''))
+        inputRefs.current[0]?.focus()
+      }, 300)
+    }
+  }
+
   const handleChange = (index: number, e: ChangeEvent<HTMLInputElement>) => {
-    if (verified) return
+    if (verified || isLocked) return
     const val = e.target.value.replace(/\D/g, '')
     if (!val) {
       const newCodes = [...codes]
@@ -84,12 +182,13 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
 
     const allFilled = newCodes.every(c => c !== '')
     if (allFilled) {
-      setTimeout(() => onVerified(), 200)
+      const fullCode = newCodes.join('')
+      setTimeout(() => validateCode(fullCode), 150)
     }
   }
 
   const handleKeyDown = (index: number, e: KeyboardEvent<HTMLInputElement>) => {
-    if (verified) return
+    if (verified || isLocked) return
     if (e.key === 'Backspace' && !codes[index] && index > 0) {
       inputRefs.current[index - 1]?.focus()
     } else if (e.key === 'ArrowLeft' && index > 0) {
@@ -100,7 +199,7 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
   }
 
   const handlePaste = (e: React.ClipboardEvent) => {
-    if (verified) return
+    if (verified || isLocked) return
     e.preventDefault()
     const pasted = e.clipboardData.getData('text').replace(/\D/g, '')
     if (!pasted) return
@@ -111,24 +210,90 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
     const focusIdx = Math.min(digits.length, CODE_LENGTH - 1)
     inputRefs.current[focusIdx]?.focus()
     if (digits.length === CODE_LENGTH) {
-      setTimeout(() => onVerified(), 200)
+      const fullCode = newCodes.join('')
+      setTimeout(() => validateCode(fullCode), 150)
     }
   }
 
+  const statusBar = () => {
+    if (status === 'success' || verified) {
+      return (
+        <div className="flex items-center justify-center gap-2 mb-4 px-4 py-2.5 rounded-xl bg-mint/20 text-mint-dark">
+          <CheckCircle className="w-4 h-4" />
+          <span className="text-sm font-medium">验证成功</span>
+        </div>
+      )
+    }
+    if (status === 'locked' || isLocked) {
+      return (
+        <div className="flex items-center justify-center gap-2 mb-4 px-4 py-2.5 rounded-xl bg-amber/20 text-amber-dark">
+          <Lock className="w-4 h-4" />
+          <span className="text-sm font-medium">{errorMsg || `错误次数过多，请${getLockRemaining()}秒后重试`}</span>
+        </div>
+      )
+    }
+    if (status === 'error') {
+      return (
+        <div className="flex items-center justify-center gap-2 mb-4 px-4 py-2.5 rounded-xl bg-rose/20 text-rose-dark">
+          <AlertTriangle className="w-4 h-4" />
+          <span className="text-sm font-medium">{errorMsg}</span>
+        </div>
+      )
+    }
+    if (status === 'expired' || isCodeExpired) {
+      return (
+        <div className="flex items-center justify-center gap-2 mb-4 px-4 py-2.5 rounded-xl bg-rose/20 text-rose-dark">
+          <Clock className="w-4 h-4" />
+          <span className="text-sm font-medium">{errorMsg || '验证码已过期，请重新获取'}</span>
+        </div>
+      )
+    }
+    if (!sent) {
+      return (
+        <div className="flex items-center justify-center gap-2 mb-4 px-4 py-2.5 rounded-xl bg-gray-100 text-ink-light">
+          <Send className="w-4 h-4" />
+          <span className="text-sm font-medium">请先点击获取验证码</span>
+        </div>
+      )
+    }
+    return null
+  }
+
+  const inputDisabled = verified || isLocked || !sent || isCodeExpired
+
   return (
-    <div className="w-full">
+    <div className="w-full relative">
+      {sent && generatedCode && (
+        <div className="absolute -top-2 right-0 z-20">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm">
+            <button
+              type="button"
+              onClick={() => setShowTestCode(v => !v)}
+              className="text-white/80 hover:text-white transition-colors"
+            >
+              {showTestCode ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            </button>
+            <span className="text-white text-xs font-mono tracking-wide">
+              护士测试码: {showTestCode ? '8888 88' : '•••• ••'}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {statusBar()}
+
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2 text-sm text-gray-600">
           <Send className="w-4 h-4 text-gray-400" />
-          <span>验证码已发送至</span>
+          <span>{sent ? '验证码已发送至' : '验证码将发送至'}</span>
           <span className="font-medium text-gray-900">{maskPhone(phone)}</span>
         </div>
         <button
           onClick={handleSendCode}
-          disabled={countdown > 0 || verified}
+          disabled={countdown > 0 || verified || isLocked}
           className={cn(
             'flex items-center gap-1 px-4 py-1.5 rounded-lg text-sm font-medium transition-all',
-            countdown > 0 || verified
+            countdown > 0 || verified || isLocked
               ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
               : 'bg-rose-50 text-rose-600 hover:bg-rose-100 active:scale-95'
           )}
@@ -156,10 +321,16 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
             className={cn(
               'relative w-12 h-14 rounded-xl border-2 flex items-center justify-center transition-all',
               verified
-                ? 'border-green-400 bg-green-50'
-                : code
-                  ? 'border-rose-400 bg-rose-50/50'
-                  : 'border-gray-200 bg-white focus-within:border-rose-400 focus-within:ring-2 focus-within:ring-rose-100'
+                ? 'border-mint-dark bg-mint/30'
+                : isCodeExpired
+                  ? 'border-rose-400 bg-rose-50'
+                  : status === 'error'
+                    ? 'border-rose-400 bg-rose-50 animate-shake'
+                    : inputDisabled && !sent
+                      ? 'border-gray-200 bg-gray-50'
+                      : code
+                        ? 'border-rose-400 bg-rose-50/50'
+                        : 'border-gray-200 bg-white focus-within:border-rose-400 focus-within:ring-2 focus-within:ring-rose-100'
             )}
           >
             <input
@@ -170,24 +341,25 @@ export default function SMSVerify({ phone, onVerified, verified }: SMSVerifyProp
               value={code}
               onChange={e => handleChange(index, e)}
               onKeyDown={e => handleKeyDown(index, e)}
-              disabled={verified}
+              disabled={inputDisabled}
               className={cn(
                 'w-full h-full text-center text-2xl font-bold bg-transparent outline-none',
-                verified ? 'text-green-600' : 'text-gray-900',
+                verified ? 'text-mint-dark' : isCodeExpired ? 'text-rose-600' : 'text-gray-900',
+                inputDisabled ? 'cursor-not-allowed text-gray-300' : '',
                 'selection:bg-transparent'
               )}
             />
             {verified && index === CODE_LENGTH - 1 && (
-              <CheckCircle className="absolute -right-2 -top-2 w-5 h-5 text-green-500 bg-white rounded-full" />
+              <CheckCircle className="absolute -right-2 -top-2 w-5 h-5 text-mint-dark bg-white rounded-full" />
             )}
           </div>
         ))}
       </div>
 
-      {verified && (
-        <div className="flex items-center justify-center gap-2 mt-4 text-green-600">
-          <CheckCircle className="w-4 h-4" />
-          <span className="text-sm font-medium">验证成功</span>
+      {sent && codeExpiredAt && !verified && !isCodeExpired && (
+        <div className="flex items-center justify-center gap-1.5 mt-3 text-xs text-ink-light">
+          <Clock className="w-3.5 h-3.5" />
+          <span>验证码有效期 {CODE_EXPIRE_MINUTES} 分钟</span>
         </div>
       )}
     </div>

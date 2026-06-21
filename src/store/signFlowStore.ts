@@ -19,8 +19,12 @@ interface SignFlowStore extends SignFlowState {
   resetSpecialConditions: () => void;
   setVoiceCompleted: (v: boolean) => void;
   setSignMethod: (method: SignMethod) => void;
-  setSignData: (data: string | null) => void;
+  setHandwriteData: (data: string | null) => void;
+  setPhotoData: (data: string | null) => void;
+  setSmsCode: (code: string | null) => void;
+  setSmsExpiredAt: (ts: number | null) => void;
   setSmsVerified: (v: boolean) => void;
+  setNurseReview: (items: string[]) => void;
   completeFlow: () => void;
   resetFlow: () => void;
   canProceedToSign: () => boolean;
@@ -38,10 +42,19 @@ const initialState: SignFlowState = {
   specialConditions: defaultConditions.map((c) => ({ ...c })),
   voiceCompleted: false,
   signMethod: null,
-  signData: null,
+  handwriteData: null,
+  photoData: null,
   smsVerified: false,
+  smsCode: null,
+  smsExpiredAt: null,
   completed: false,
   queueNumber: "",
+  nurseReview: {
+    reviewed: false,
+    reviewedAt: null,
+    reviewedItems: [],
+  },
+  confirmedSignMethod: null,
 };
 
 export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
@@ -100,13 +113,26 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
 
   setVoiceCompleted: (v) => set({ voiceCompleted: v }),
   setSignMethod: (method) => set({ signMethod: method }),
-  setSignData: (data) => set({ signData: data }),
+  setHandwriteData: (data) => set({ handwriteData: data }),
+  setPhotoData: (data) => set({ photoData: data }),
+  setSmsCode: (code) => set({ smsCode: code }),
+  setSmsExpiredAt: (ts) => set({ smsExpiredAt: ts }),
   setSmsVerified: (v) => set({ smsVerified: v }),
+
+  setNurseReview: (reviewedItems) =>
+    set({
+      nurseReview: {
+        reviewed: reviewedItems.length > 0,
+        reviewedAt: reviewedItems.length > 0 ? new Date().toISOString() : null,
+        reviewedItems,
+      },
+    }),
 
   completeFlow: () =>
     set({
       completed: true,
       queueNumber: generateQueueNumber(),
+      confirmedSignMethod: get().signMethod,
     }),
 
   resetFlow: () => set({ ...initialState, queueNumber: "" }),
@@ -115,13 +141,14 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
     const {
       voiceCompleted,
       signMethod,
-      signData,
+      handwriteData,
+      photoData,
       smsVerified,
     } = get();
     if (!voiceCompleted) return false;
     if (!signMethod) return false;
-    if (signMethod === "handwrite") return !!signData;
-    if (signMethod === "photo") return !!signData;
+    if (signMethod === "handwrite") return !!handwriteData;
+    if (signMethod === "photo") return !!photoData;
     if (signMethod === "sms") return smsVerified;
     return false;
   },
