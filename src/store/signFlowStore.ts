@@ -7,6 +7,8 @@ import type {
   ConsentRecord,
   ConsentStatus,
   TimelineNode,
+  NurseNote,
+  NurseNoteType,
 } from "@/types";
 import { specialConditions as defaultConditions } from "@/data/mockFAQs";
 import { findAppointmentByPhone } from "@/data/mockAppointments";
@@ -37,6 +39,8 @@ interface SignFlowStore extends SignFlowState {
   findConsentRecordById: (id: string) => ConsentRecord | undefined;
   resetNurseReview: () => void;
   checkSmsValidNow: () => boolean;
+  addNurseNote: (recordId: string, note: Omit<NurseNote, 'id' | 'createdAt' | 'nurseName'>) => void;
+  getPendingReviewRecords: () => ConsentRecord[];
 }
 
 const CONSENT_RECORDS_KEY = "yuemei_consent_records";
@@ -46,7 +50,11 @@ function loadConsentRecords(): ConsentRecord[] {
   try {
     const raw = window.localStorage.getItem(CONSENT_RECORDS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as ConsentRecord[];
+    const records = JSON.parse(raw) as ConsentRecord[];
+    return records.map((r) => ({
+      ...r,
+      nurseNotes: r.nurseNotes || [],
+    }));
   } catch {
     return [];
   }
@@ -309,6 +317,7 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
       voiceCompleted: state.voiceCompleted,
       submittedAt: new Date().toISOString(),
       timeline,
+      nurseNotes: [],
     };
     const nextRecords = [rec, ...state.consentRecords];
     saveConsentRecords(nextRecords);
@@ -406,5 +415,34 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
     if (!smsVerified) return false;
     if (!smsExpiredAt) return false;
     return Date.now() < smsExpiredAt;
+  },
+
+  addNurseNote: (recordId, note) =>
+    set((s) => {
+      const next = s.consentRecords.map((r) => {
+        if (r.id !== recordId) return r;
+        const newNote: NurseNote = {
+          ...note,
+          id: `NN-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        };
+        return {
+          ...r,
+          nurseNotes: [newNote, ...r.nurseNotes],
+        };
+      });
+      saveConsentRecords(next);
+      return { consentRecords: next };
+    }),
+
+  getPendingReviewRecords: () => {
+    const all = get().consentRecords;
+    return all.filter(
+      (r) =>
+        r.status === 'pending_review' ||
+        (r.status === 'called' &&
+          r.checkedConditions.some((c) => c.needNurseReview && !r.nurseReview.reviewed)
+        )
+    );
   },
 }));

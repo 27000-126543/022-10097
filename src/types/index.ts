@@ -107,12 +107,24 @@ export interface ConsentRecord {
   submittedAt: string | null;
 
   timeline: ConsentTimelineNode[];
+
+  nurseNotes: NurseNote[];
 }
 
 export interface NurseReview {
   reviewed: boolean;
   reviewedAt: string | null;
   reviewedItems: string[];
+}
+
+export type NurseNoteType = 'review_pass' | 'review_pending' | 'general';
+
+export interface NurseNote {
+  id: string;
+  content: string;
+  createdAt: string;
+  nurseId: string;
+  type: NurseNoteType;
 }
 
 export interface SignFlowState {

@@ -29,7 +29,7 @@ import { useSignFlowStore } from '@/store/signFlowStore';
 import { riskPoints } from '@/data/mockRisks';
 import { specialConditions as allConditions } from '@/data/mockFAQs';
 import { maskPhone, cn } from '@/lib/utils';
-import type { ConsentRecord, SignMethod, TimelineNode } from '@/types';
+import type { ConsentRecord, SignMethod, TimelineNode, NurseNote, NurseNoteType } from '@/types';
 
 function formatDateCN(ts: string | null): string {
   if (!ts) return '';
@@ -140,8 +140,12 @@ function SectionDivider() {
 export default function ConsentPreviewPage() {
   const navigate = useNavigate();
   const { recordId } = useParams<{ recordId: string }>();
-  const { findConsentRecordById } = useSignFlowStore();
+  const { findConsentRecordById, addNurseNote } = useSignFlowStore();
   const [toastVisible, setToastVisible] = useState(false);
+  const [noteContent, setNoteContent] = useState('');
+  const [noteType, setNoteType] = useState<NurseNoteType>('review_pass');
+  const [nurseId] = useState('0000');
+  const [latestNoteId, setLatestNoteId] = useState<string | null>(null);
 
   const record = useMemo(
     () => (recordId ? findConsentRecordById(recordId) : undefined),
@@ -226,6 +230,20 @@ export default function ConsentPreviewPage() {
 
   const handlePrint = () => {
     setToastVisible(true);
+  };
+
+  const handleAddNote = () => {
+    if (!record || !noteContent.trim()) return;
+    const trimmedContent = noteContent.trim();
+    addNurseNote(record.id, {
+      content: trimmedContent,
+      nurseId,
+      type: noteType,
+    });
+    setNoteContent('');
+    const newNoteId = `NN-${Date.now()}`;
+    setLatestNoteId(newNoteId);
+    setTimeout(() => setLatestNoteId(null), 600);
   };
 
   if (!record) {
@@ -522,6 +540,162 @@ export default function ConsentPreviewPage() {
                   </div>
                 </>
               )}
+
+              <SectionDivider />
+
+              <div>
+                <SectionHeader icon={MessageSquare} title="追溯备注" />
+                <div className="space-y-4 rounded-2xl bg-warmwhite/60 p-4">
+                  <div>
+                    <span className="text-xs font-medium text-ink-pale">新增备注：</span>
+                    <textarea
+                      value={noteContent}
+                      onChange={(e) => setNoteContent(e.target.value.slice(0, 200))}
+                      placeholder="请输入备注内容..."
+                      rows={4}
+                      className="mt-2 w-full resize-none rounded-xl border border-ink-pale/20 bg-white px-4 py-3 text-sm text-ink placeholder:text-ink-pale/50 outline-none transition-all focus:border-rose focus:ring-2 focus:ring-rose/20"
+                    />
+                    <div className="mt-2 flex justify-end">
+                      <span className="text-[10px] font-medium text-ink-pale">
+                        {noteContent.length}/200
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="text-xs font-medium text-ink-pale">类型：</span>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        onClick={() => setNoteType('review_pass')}
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-all',
+                          noteType === 'review_pass'
+                            ? 'bg-mint/25 text-mint-dark shadow-[0_1px_4px_rgba(127,191,153,0.15)]'
+                            : 'bg-white text-ink-light border border-ink-pale/20 hover:bg-warmwhite'
+                        )}
+                      >
+                        🟢 放行
+                      </button>
+                      <button
+                        onClick={() => setNoteType('review_pending')}
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-all',
+                          noteType === 'review_pending'
+                            ? 'bg-amber/25 text-amber-dark shadow-[0_1px_4px_rgba(251,191,36,0.15)]'
+                            : 'bg-white text-ink-light border border-ink-pale/20 hover:bg-warmwhite'
+                        )}
+                      >
+                        🟡 待处理说明
+                      </button>
+                      <button
+                        onClick={() => setNoteType('general')}
+                        className={cn(
+                          'flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-all',
+                          noteType === 'general'
+                            ? 'bg-ink-pale/25 text-ink shadow-[0_1px_4px_rgba(45,42,50,0.1)]'
+                            : 'bg-white text-ink-light border border-ink-pale/20 hover:bg-warmwhite'
+                        )}
+                      >
+                        ⚪ 普通
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-ink-pale">👩‍⚕️ 护士工号：</span>
+                      <input
+                        type="text"
+                        value={nurseId}
+                        disabled
+                        className="w-16 rounded-lg border border-ink-pale/20 bg-warmwhite px-3 py-2 text-center text-sm font-semibold text-ink-light outline-none cursor-not-allowed"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAddNote}
+                      disabled={!noteContent.trim()}
+                      className={cn(
+                        'ml-auto rounded-full px-6 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.97]',
+                        noteContent.trim()
+                          ? 'bg-gradient-to-r from-mint-dark via-mint to-mint-light shadow-[0_4px_12px_rgba(127,191,153,0.35)] hover:shadow-[0_6px_16px_rgba(127,191,153,0.45)]'
+                          : 'bg-ink-pale/30 cursor-not-allowed'
+                      )}
+                    >
+                      添加备注
+                    </button>
+                  </div>
+
+                  {record.nurseNotes.length > 0 && (
+                    <div className="mt-4">
+                      <span className="text-xs font-medium text-ink-pale">历史备注（按时间倒序）：</span>
+                      <div className="mt-2 space-y-2">
+                        {record.nurseNotes.map((note) => {
+                          const typeConfig = {
+                            review_pass: {
+                              label: '放行',
+                              badge: '🟢',
+                              bgColor: 'bg-mint/10',
+                              borderColor: 'border-mint/20',
+                              textColor: 'text-mint-dark',
+                            },
+                            review_pending: {
+                              label: '待处理',
+                              badge: '🟡',
+                              bgColor: 'bg-amber/10',
+                              borderColor: 'border-amber/20',
+                              textColor: 'text-amber-dark',
+                            },
+                            general: {
+                              label: '普通',
+                              badge: '⚪',
+                              bgColor: 'bg-ink-pale/10',
+                              borderColor: 'border-ink-pale/20',
+                              textColor: 'text-ink-light',
+                            },
+                          };
+                          const config = typeConfig[note.type];
+                          return (
+                            <motion.div
+                              key={note.id}
+                              initial={latestNoteId === note.id ? { opacity: 0, scale: 0.95, y: -10 } : false}
+                              animate={latestNoteId === note.id ? { opacity: 1, scale: 1, y: 0 } : {}}
+                              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+                              className={cn(
+                                'rounded-xl border p-3',
+                                config.bgColor,
+                                config.borderColor
+                              )}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={cn(
+                                      'rounded-full px-2 py-0.5 text-[10px] font-bold',
+                                      config.bgColor.replace('/10', '/25'),
+                                      config.textColor
+                                    )}
+                                  >
+                                    {config.badge} [{config.label}]
+                                  </span>
+                                  <span className="text-xs font-semibold text-ink">
+                                    护士({note.nurseId})
+                                  </span>
+                                </div>
+                                <span className="text-xs font-medium text-ink-pale">
+                                  {formatTime(note.createdAt)}
+                                </span>
+                              </div>
+                              <p className="mt-1.5 text-sm text-ink leading-relaxed">
+                                {note.content}
+                              </p>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
 
               <SectionDivider />
 

@@ -19,10 +19,13 @@ import {
   Filter,
   RotateCcw,
   X,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { useSignFlowStore } from '@/store/signFlowStore';
+import { getRiskFilterKeys, matchRiskType, getRiskDisplayLabel } from '@/data/riskAliases';
 import type { ConsentRecord, ConsentStatus } from '@/types';
 
 const statusConfig: Record<
@@ -77,13 +80,7 @@ const statusFilterOptions: { key: ConsentStatus | 'all'; label: string }[] = [
   { key: 'completed', label: '已完成' },
 ];
 
-const nurseReviewRiskLabels = [
-  '孕期或哺乳期',
-  '瘢痕体质',
-  '近期服药',
-  '过敏史',
-  '近期手术史',
-];
+const nurseReviewRiskLabels = getRiskFilterKeys();
 
 function maskPhone(phone: string): string {
   if (phone.length < 7) return phone;
@@ -138,8 +135,7 @@ function isUrgent(r: ConsentRecord): boolean {
     const mins = (Date.now() - new Date(r.submittedAt || 0).getTime()) / 60000;
     if (mins > 30) return true;
   }
-  const pregnancyLabels = ['孕期或哺乳期', '孕', '哺乳'];
-  if (r.checkedConditions.some((c) => pregnancyLabels.some((p) => c.label.includes(p)))) {
+  if (r.checkedConditions.some((c) => matchRiskType(c.label, '孕期或哺乳期'))) {
     return true;
   }
   const needCount = r.checkedConditions.filter((c) => c.needNurseReview).length;
@@ -151,9 +147,10 @@ interface RecordCardProps {
   record: ConsentRecord;
   index: number;
   onMarkComplete: (id: string) => void;
+  selectedRisks: Set<string>;
 }
 
-function RecordCard({ record, index, onMarkComplete }: RecordCardProps) {
+function RecordCard({ record, index, onMarkComplete, selectedRisks }: RecordCardProps) {
   const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
   const cfg = statusConfig[record.status];
@@ -371,28 +368,38 @@ function RecordCard({ record, index, onMarkComplete }: RecordCardProps) {
                     </div>
                     {record.checkedConditions.length > 0 ? (
                       <ul className="space-y-2">
-                        {record.checkedConditions.map((c) => (
-                          <li
-                            key={c.id}
-                            className={cn(
-                              'flex items-start gap-2 text-sm',
-                              c.needNurseReview && 'text-amber-dark'
-                            )}
-                          >
-                            {c.needNurseReview && (
-                              <AlertTriangle
-                                className="w-4 h-4 mt-0.5 shrink-0"
-                                strokeWidth={2}
-                              />
-                            )}
-                            <span className="font-medium">{c.label}</span>
-                            {c.needNurseReview && (
-                              <span className="text-xs bg-amber/30 px-1.5 py-0.5 rounded font-semibold">
-                                需复核
-                              </span>
-                            )}
-                          </li>
-                        ))}
+                        {record.checkedConditions.map((c) => {
+                          const matchedFilter = c.needNurseReview && [...selectedRisks].some(
+                            (filterKey) => matchRiskType(c.label, filterKey)
+                          );
+                          return (
+                            <li
+                              key={c.id}
+                              className={cn(
+                                'flex items-start gap-2 text-sm',
+                                c.needNurseReview && 'text-amber-dark'
+                              )}
+                            >
+                              {c.needNurseReview && (
+                                <AlertTriangle
+                                  className="w-4 h-4 mt-0.5 shrink-0"
+                                  strokeWidth={2}
+                                />
+                              )}
+                              <span className="font-medium">{c.label}</span>
+                              {c.needNurseReview && (
+                                <span className="text-xs bg-amber/30 px-1.5 py-0.5 rounded font-semibold">
+                                  需复核
+                                </span>
+                              )}
+                              {matchedFilter && (
+                                <span className="text-xs bg-mint/30 text-mint-dark px-1.5 py-0.5 rounded font-semibold">
+                                  ✓ 已匹配筛选条件
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : (
                       <div className="text-sm text-ink-pale">
@@ -608,6 +615,7 @@ export default function NurseRecordsPage() {
   const navigate = useNavigate();
   const consentRecords = useSignFlowStore((s) => s.consentRecords);
   const updateStatus = useSignFlowStore((s) => s.updateConsentRecordStatus);
+  const getPendingReviewRecords = useSignFlowStore((s) => s.getPendingReviewRecords);
 
   const [now, setNow] = useState(new Date());
   const [searchText, setSearchText] = useState('');
@@ -616,6 +624,10 @@ export default function NurseRecordsPage() {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('today');
   const [statusFilter, setStatusFilter] = useState<ConsentStatus | 'all'>('all');
   const [selectedRisks, setSelectedRisks] = useState<Set<string>>(new Set());
+
+  const [selectedQueueRecordId, setSelectedQueueRecordId] = useState<string | null>(null);
+  const [showHandoverModal, setShowHandoverModal] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60 * 1000);
@@ -633,7 +645,147 @@ export default function NurseRecordsPage() {
     [consentRecords]
   );
 
+  const pendingReviewRecords = useMemo(() => {
+    return getPendingReviewRecords();
+  }, [getPendingReviewRecords]);
+
+  const selectedQueueRecord = useMemo(() => {
+    if (!selectedQueueRecordId) return null;
+    return consentRecords.find((r) => r.id === selectedQueueRecordId) || null;
+  }, [selectedQueueRecordId, consentRecords]);
+
+  const handoverData = useMemo(() => {
+    const todayRecords = consentRecords.filter((r) =>
+      isInTimeRange(r.submittedAt, 'today', now)
+    );
+    const urgent: ConsentRecord[] = [];
+    const later: ConsentRecord[] = [];
+    const completed: ConsentRecord[] = [];
+
+    todayRecords.forEach((r) => {
+      if (r.status === 'completed') {
+        completed.push(r);
+      } else if (isUrgent(r)) {
+        urgent.push(r);
+      } else {
+        later.push(r);
+      }
+    });
+
+    return { urgent, later, completed, all: todayRecords };
+  }, [consentRecords, now]);
+
+  const formatHandoverText = () => {
+    const d = now;
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const total = handoverData.all.length;
+    const needHandle = handoverData.urgent.length + handoverData.later.length;
+
+    let text = `【悦美医美】${month}月${day}日 交班摘要\n`;
+    text += `--------------------\n`;
+
+    if (handoverData.urgent.length > 0) {
+      text += `🔴 马上处理（${handoverData.urgent.length}位）\n`;
+      handoverData.urgent.forEach((r) => {
+        const risks = r.checkedConditions
+          .filter((c) => c.needNurseReview)
+          .map((c) => getRiskDisplayLabel(c.label))
+          .join('、');
+        const riskText = risks || '无异常';
+        text += `• ${r.patientName} ${formatTime(r.submittedAt)} ${r.projectName} · ${riskText}\n`;
+      });
+      text += `\n`;
+    }
+
+    if (handoverData.later.length > 0) {
+      text += `🟡 可稍后处理（${handoverData.later.length}位）\n`;
+      handoverData.later.forEach((r) => {
+        const risks = r.checkedConditions
+          .filter((c) => c.needNurseReview)
+          .map((c) => getRiskDisplayLabel(c.label))
+          .join('、');
+        const riskText = risks || '无异常';
+        text += `• ${r.patientName} ${formatTime(r.submittedAt)} ${r.projectName} · ${riskText}\n`;
+      });
+      text += `\n`;
+    }
+
+    if (handoverData.completed.length > 0) {
+      text += `🟢 已完成（${handoverData.completed.length}位）\n`;
+      handoverData.completed.forEach((r) => {
+        const risks = r.checkedConditions
+          .filter((c) => c.needNurseReview)
+          .map((c) => getRiskDisplayLabel(c.label))
+          .join('、');
+        const riskText = risks || '无异常';
+        text += `• ${r.patientName} ${formatTime(r.submittedAt)} ${r.projectName} · ${riskText}\n`;
+      });
+      text += `\n`;
+    }
+
+    text += `--------------------\n`;
+    text += `共 ${total} 位顾客，需处理 ${needHandle} 位待处理\n`;
+
+    return text;
+  };
+
+  const handleCopyHandover = async () => {
+    try {
+      await navigator.clipboard.writeText(formatHandoverText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      alert('复制失败，请手动复制');
+    }
+  };
+
+  const handleQueueCardClick = (recordId: string) => {
+    setSelectedQueueRecordId((prev) => (prev === recordId ? null : recordId));
+  };
+
+  const handleMarkCompleteFromQueue = (id: string) => {
+    updateStatus(id, 'completed');
+    if (selectedQueueRecordId === id) {
+      setSelectedQueueRecordId(null);
+    }
+  };
+
+  const getAgeFromPhone = (phone: string): number => {
+    const lastTwo = phone.slice(-2);
+    const num = parseInt(lastTwo, 10);
+    return 18 + (num % 40);
+  };
+
+  const getRiskTags = (record: ConsentRecord): string[] => {
+    const nurseRisks = record.checkedConditions.filter((c) => c.needNurseReview);
+    if (nurseRisks.length === 0) return [];
+    if (nurseRisks.length >= 2) return [`${nurseRisks.length}项风险`];
+    return [getRiskDisplayLabel(nurseRisks[0].label)];
+  };
+
+  const isCardUrgent = (record: ConsentRecord): boolean => {
+    if (record.status === 'pending_review') {
+      const mins = (Date.now() - new Date(record.submittedAt || 0).getTime()) / 60000;
+      if (mins > 30) return true;
+    }
+    return false;
+  };
+
   const effectiveStatusFilter = statusFilter === 'all' ? activeTab : statusFilter;
+
+  const riskTypeHitCounts = useMemo(() => {
+    const list = consentRecords.filter((r) => r.status === effectiveStatusFilter);
+    return getRiskFilterKeys().reduce((acc, key) => {
+      const count = list.filter((r) =>
+        r.checkedConditions.some((c) =>
+          c.needNurseReview && matchRiskType(c.label, key)
+        )
+      ).length;
+      acc[key] = { hit: count, total: list.length };
+      return acc;
+    }, {} as Record<string, { hit: number; total: number }>);
+  }, [consentRecords, effectiveStatusFilter]);
 
   const filteredRecords = useMemo(() => {
     const kw = searchText.trim().toLowerCase();
@@ -642,12 +794,12 @@ export default function NurseRecordsPage() {
     list = list.filter((r) => isInTimeRange(r.submittedAt, timeRange, now));
 
     if (selectedRisks.size > 0) {
-      list = list.filter((r) => {
-        const nurseRisks = r.checkedConditions.filter((c) => c.needNurseReview);
-        return nurseRisks.some((c) =>
-          Array.from(selectedRisks).some((sel) => c.label.includes(sel) || sel.includes(c.label))
-        );
-      });
+      list = list.filter((r) =>
+        r.checkedConditions.some((c) =>
+          c.needNurseReview &&
+          [...selectedRisks].some((filterKey) => matchRiskType(c.label, filterKey))
+        )
+      );
     }
 
     if (kw) {
@@ -731,6 +883,13 @@ export default function NurseRecordsPage() {
                 {formatDateTime(now)}
               </div>
               <button
+                onClick={() => setShowHandoverModal(true)}
+                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-full text-sm font-semibold text-rose-dark bg-rose-light/50 border border-rose-light/50 hover:bg-rose-light transition-all active:scale-[0.97]"
+              >
+                <ClipboardList className="w-4 h-4" strokeWidth={2} />
+                交班摘要
+              </button>
+              <button
                 onClick={() => navigate('/')}
                 className="inline-flex items-center gap-1.5 h-9 px-4 rounded-full text-sm font-semibold text-ink-light bg-white border border-ink-pale/30 hover:bg-warmwhite transition-all active:scale-[0.97]"
               >
@@ -813,6 +972,273 @@ export default function NurseRecordsPage() {
         </div>
       </motion.div>
 
+      <AnimatePresence>
+        {pendingReviewRecords.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto' }}
+            exit={{ opacity: 0, y: -8, height: 0 }}
+            transition={{ duration: 0.35, ease: 'easeOut' }}
+            className="shrink-0 px-6 xl:px-10 pt-4 overflow-hidden"
+          >
+            <div className="max-w-[1400px] mx-auto">
+              <div className="bg-gradient-to-br from-rose via-rose-dark to-rose-light/80 rounded-[24px] p-5 shadow-card">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full bg-white/25 backdrop-blur-sm">
+                      <AlertTriangle className="w-5 h-5 text-white" strokeWidth={2.2} />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-white drop-shadow-sm">
+                        🔴 异常复核队列（{pendingReviewRecords.length} 位待处理）
+                      </h2>
+                      <p className="text-white/70 text-xs font-medium">
+                        点击卡片查看详情并处理
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+                    <style>{`
+                      .scrollbar-hide::-webkit-scrollbar {
+                        display: none;
+                      }
+                    `}</style>
+                    {pendingReviewRecords.map((record, idx) => {
+                      const isSelected = selectedQueueRecordId === record.id;
+                      const urgent = isCardUrgent(record);
+                      const age = getAgeFromPhone(record.phone);
+                      const tags = getRiskTags(record);
+
+                      return (
+                        <motion.button
+                          key={record.id}
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ duration: 0.3, delay: idx * 0.05 }}
+                          whileTap={{ scale: 0.96 }}
+                          onClick={() => handleQueueCardClick(record.id)}
+                          className={cn(
+                            'shrink-0 w-[120px] h-[100px] rounded-2xl bg-white p-3 flex flex-col justify-between transition-all duration-200 shadow-soft',
+                            isSelected && 'ring-2 ring-white ring-offset-2 ring-offset-rose',
+                            urgent && 'animate-pulse border-2 border-red-500'
+                          )}
+                        >
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-bold text-ink truncate">
+                                {record.patientName}
+                              </span>
+                              <span className="text-[10px] text-ink-light font-medium">
+                                {age}岁
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {tags.length > 0 ? (
+                                tags.map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber/20 text-amber-dark"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-mint/30 text-mint-dark">
+                                  无异常
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-ink-pale font-medium">
+                            {formatTime(record.submittedAt)}
+                          </div>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <AnimatePresence>
+                {selectedQueueRecord && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                    animate={{ opacity: 1, height: '400px', marginTop: '16px' }}
+                    exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                    transition={{ duration: 0.35, ease: 'easeOut' }}
+                    className="overflow-hidden"
+                  >
+                    <div className="h-full bg-white rounded-[24px] shadow-card border border-rose-light/20 overflow-hidden">
+                      <div className="h-full overflow-y-auto p-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <h3 className="text-xl font-bold text-ink">
+                              {selectedQueueRecord.patientName}
+                            </h3>
+                            <span className="text-sm text-ink-light">
+                              {maskPhone(selectedQueueRecord.phone)}
+                            </span>
+                            <span
+                              className={cn(
+                                'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold',
+                                statusConfig[selectedQueueRecord.status].badgeBg,
+                                statusConfig[selectedQueueRecord.status].badgeText
+                              )}
+                            >
+                              {statusConfig[selectedQueueRecord.status].label}
+                            </span>
+                          </div>
+                          {selectedQueueRecord.status !== 'completed' && (
+                            <button
+                              onClick={() => handleMarkCompleteFromQueue(selectedQueueRecord.id)}
+                              className="inline-flex items-center gap-1.5 h-10 px-6 rounded-full text-sm font-bold transition-all duration-200 bg-gradient-to-r from-mint to-mint-dark text-white shadow-soft hover:shadow-pressed active:scale-[0.98]"
+                            >
+                              <CircleCheck className="w-4 h-4" strokeWidth={2.2} />
+                              标记复核完成
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                          <div className="bg-warmwhite/50 rounded-2xl p-4 border border-rose-light/20">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rose-light/40 text-ink text-xs font-bold">
+                                项
+                              </span>
+                              <h4 className="text-sm font-bold text-ink">项目信息</h4>
+                            </div>
+                            <div className="space-y-1.5 text-sm">
+                              <div className="flex gap-2">
+                                <span className="text-ink-pale shrink-0 w-16">项目：</span>
+                                <span className="text-ink font-medium">{selectedQueueRecord.projectName}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-ink-pale shrink-0 w-16">部位：</span>
+                                <span className="text-ink">{selectedQueueRecord.bodyPart}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-ink-pale shrink-0 w-16">麻醉：</span>
+                                <span className="text-ink">{selectedQueueRecord.anesthesiaLabel}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <span className="text-ink-pale shrink-0 w-16">医生：</span>
+                                <span className="text-ink">{selectedQueueRecord.doctorName}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="bg-warmwhite/50 rounded-2xl p-4 border border-rose-light/20">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rose-light/40 text-ink text-xs font-bold">
+                                风
+                              </span>
+                              <h4 className="text-sm font-bold text-ink">风险阅读</h4>
+                            </div>
+                            <div className="flex items-center gap-5">
+                              {[0, 1, 2, 3].map((i) => {
+                                const done = i < selectedQueueRecord.understoodRisks.length;
+                                return (
+                                  <div key={i} className="flex flex-col items-center gap-1.5">
+                                    <div
+                                      className={cn(
+                                        'w-9 h-9 rounded-full flex items-center justify-center transition-all',
+                                        done ? 'bg-mint/30 text-mint-dark' : 'bg-gray-100 text-gray-400'
+                                      )}
+                                    >
+                                      {done ? (
+                                        <CheckCircle2 className="w-5 h-5" strokeWidth={2.5} />
+                                      ) : (
+                                        <CheckCircle2 className="w-5 h-5" strokeWidth={2} />
+                                      )}
+                                    </div>
+                                    <span className={cn('text-xs font-medium', done ? 'text-mint-dark' : 'text-ink-pale')}>
+                                      {done ? '已理解' : '未读'}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div className="mt-3 text-xs text-ink-pale">
+                              共 {selectedQueueRecord.understoodRisks.length} / 4 项已确认理解
+                            </div>
+                          </div>
+
+                          <div className="bg-warmwhite/50 rounded-2xl p-4 border border-rose-light/20">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rose-light/40 text-ink text-xs font-bold">
+                                勾
+                              </span>
+                              <h4 className="text-sm font-bold text-ink">勾选情况</h4>
+                            </div>
+                            {selectedQueueRecord.checkedConditions.length > 0 ? (
+                              <ul className="space-y-2">
+                                {selectedQueueRecord.checkedConditions.map((c) => (
+                                  <li
+                                    key={c.id}
+                                    className={cn('flex items-start gap-2 text-sm', c.needNurseReview && 'text-amber-dark')}
+                                  >
+                                    {c.needNurseReview && (
+                                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" strokeWidth={2} />
+                                    )}
+                                    <span className="font-medium">{c.label}</span>
+                                    {c.needNurseReview && (
+                                      <span className="text-xs bg-amber/30 px-1.5 py-0.5 rounded font-semibold">需复核</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <div className="text-sm text-ink-pale">无特殊勾选情况</div>
+                            )}
+                          </div>
+
+                          <div className="bg-warmwhite/50 rounded-2xl p-4 border border-rose-light/20">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-rose-light/40 text-ink text-xs font-bold">
+                                护
+                              </span>
+                              <h4 className="text-sm font-bold text-ink">护士复核</h4>
+                            </div>
+                            {selectedQueueRecord.nurseReview.reviewed ? (
+                              <>
+                                <div className="text-sm text-ink font-medium mb-2">
+                                  复核人：演示护士(0000)
+                                </div>
+                                <div className="text-xs text-ink-light mb-2">
+                                  时间：{formatTime(selectedQueueRecord.nurseReview.reviewedAt)}
+                                </div>
+                                {selectedQueueRecord.nurseReview.reviewedItems.length > 0 && (
+                                  <ul className="space-y-1">
+                                    {selectedQueueRecord.nurseReview.reviewedItems.map((item, idx) => (
+                                      <li key={idx} className="flex items-start gap-1.5 text-xs text-ink-light">
+                                        <CheckCircle2 className="w-3.5 h-3.5 text-mint-dark shrink-0 mt-0.5" strokeWidth={2.5} />
+                                        {item}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </>
+                            ) : (
+                              <div className="text-sm text-amber-dark font-semibold flex items-center gap-1.5">
+                                <AlertTriangle className="w-4 h-4" strokeWidth={2} />
+                                暂未复核，请尽快处理
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -865,14 +1291,19 @@ export default function NurseRecordsPage() {
                     >
                       <span>{label}</span>
                       {active && (
-                        <motion.span
-                          initial={{ opacity: 0, scale: 0, rotate: -90 }}
-                          animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                          exit={{ opacity: 0, scale: 0, rotate: 90 }}
-                          className="inline-flex items-center justify-center"
-                        >
-                          <X className="w-3 h-3" strokeWidth={2.5} />
-                        </motion.span>
+                        <>
+                          <span className="ml-1 text-[10px] opacity-80">
+                            {riskTypeHitCounts[label].hit}/{riskTypeHitCounts[label].total}
+                          </span>
+                          <motion.span
+                            initial={{ opacity: 0, scale: 0, rotate: -90 }}
+                            animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                            exit={{ opacity: 0, scale: 0, rotate: 90 }}
+                            className="inline-flex items-center justify-center"
+                          >
+                            <X className="w-3 h-3" strokeWidth={2.5} />
+                          </motion.span>
+                        </>
                       )}
                     </motion.button>
                   );
@@ -906,6 +1337,30 @@ export default function NurseRecordsPage() {
 
       <main className="flex-1 min-h-0 overflow-y-auto px-6 xl:px-10 pb-8">
         <div className="max-w-[1400px] mx-auto">
+          <AnimatePresence>
+            {selectedRisks.size > 0 && filteredRecords.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: 'auto' }}
+                exit={{ opacity: 0, y: -8, height: 0 }}
+                transition={{ duration: 0.25 }}
+                className="mb-4 overflow-hidden"
+              >
+                <div className="inline-flex items-center gap-2 px-4 py-2 bg-amber/10 border border-amber/30 rounded-full text-sm">
+                  <span className="text-ink font-medium">
+                    已筛选：{Array.from(selectedRisks).join(' · ')}（共命中 {filteredRecords.length} 条记录）
+                  </span>
+                  <button
+                    onClick={() => setSelectedRisks(new Set())}
+                    className="inline-flex items-center justify-center w-5 h-5 rounded-full hover:bg-amber/20 transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5 text-amber-dark" strokeWidth={2.5} />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <AnimatePresence mode="wait">
             {filteredRecords.length > 0 ? (
               <motion.div
@@ -958,6 +1413,7 @@ export default function NurseRecordsPage() {
                                 record={record}
                                 index={i}
                                 onMarkComplete={handleMarkComplete}
+                                selectedRisks={selectedRisks}
                               />
                             ))}
                           </div>
@@ -1012,6 +1468,7 @@ export default function NurseRecordsPage() {
                                 record={record}
                                 index={i}
                                 onMarkComplete={handleMarkComplete}
+                                selectedRisks={selectedRisks}
                               />
                             ))}
                           </div>
@@ -1034,6 +1491,7 @@ export default function NurseRecordsPage() {
                         record={record}
                         index={i}
                         onMarkComplete={handleMarkComplete}
+                        selectedRisks={selectedRisks}
                       />
                     ))}
                   </div>
@@ -1071,6 +1529,223 @@ export default function NurseRecordsPage() {
           </AnimatePresence>
         </div>
       </main>
+
+      <AnimatePresence>
+        {showHandoverModal && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50"
+              onClick={() => setShowHandoverModal(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 100, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 100, scale: 0.95 }}
+              transition={{ duration: 0.4, ease: [0.25, 0.8, 0.25, 1] }}
+              className="fixed inset-x-4 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 max-w-2xl w-full z-50 max-h-[80vh]"
+            >
+              <div className="bg-white rounded-[32px] shadow-2xl border border-rose-light/30 overflow-hidden flex flex-col max-h-[80vh]">
+                <div className="px-6 py-5 border-b border-rose-light/20 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full bg-rose-light/40">
+                      <ClipboardList className="w-5 h-5 text-rose-dark" strokeWidth={2} />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold text-ink">
+                        📋 今日交班摘要
+                      </h2>
+                      <p className="text-sm text-ink-light">
+                        {formatDateTime(now).slice(0, 12)}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowHandoverModal(false)}
+                    className="inline-flex items-center justify-center w-10 h-10 rounded-full hover:bg-warmwhite transition-colors"
+                  >
+                    <X className="w-5 h-5 text-ink-light" strokeWidth={2} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <motion.div
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: 0.1 }}
+                  >
+                    <h3 className="text-lg font-bold text-rose-dark mb-3 flex items-center gap-2">
+                      🔴 马上处理（{handoverData.urgent.length} 位）
+                    </h3>
+                    {handoverData.urgent.length > 0 ? (
+                      <ul className="space-y-2">
+                        {handoverData.urgent.map((record, idx) => {
+                          const risks = record.checkedConditions
+                            .filter((c) => c.needNurseReview)
+                            .map((c) => getRiskDisplayLabel(c.label))
+                            .join('、');
+                          return (
+                            <motion.li
+                              key={record.id}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ duration: 0.25, delay: 0.15 + idx * 0.05 }}
+                              className="flex items-start gap-2 text-sm bg-rose-light/20 rounded-xl px-4 py-3"
+                            >
+                              <span className="text-rose-dark font-bold">•</span>
+                              <span className="flex-1">
+                                <span className="font-semibold text-ink">{record.patientName}</span>
+                                <span className="text-ink-pale ml-1">({formatTime(record.submittedAt)})</span>
+                                <span className="text-ink mx-2">·</span>
+                                <span className="text-ink">{record.projectName}</span>
+                                <span className="text-ink mx-2">·</span>
+                                <span className={cn('font-medium', risks ? 'text-amber-dark' : 'text-mint-dark')}>
+                                  {risks || '无异常'}
+                                </span>
+                              </span>
+                            </motion.li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <div className="text-sm text-ink-pale bg-warmwhite rounded-xl px-4 py-3">
+                        暂无紧急处理项
+                      </div>
+                    )}
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: 0.25 }}
+                  >
+                    <h3 className="text-lg font-bold text-amber-dark mb-3 flex items-center gap-2">
+                      🟡 可稍后处理（{handoverData.later.length} 位）
+                    </h3>
+                    {handoverData.later.length > 0 ? (
+                      <ul className="space-y-2">
+                        {handoverData.later.map((record, idx) => {
+                          const risks = record.checkedConditions
+                            .filter((c) => c.needNurseReview)
+                            .map((c) => getRiskDisplayLabel(c.label))
+                            .join('、');
+                          return (
+                            <motion.li
+                              key={record.id}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ duration: 0.25, delay: 0.3 + idx * 0.05 }}
+                              className="flex items-start gap-2 text-sm bg-amber/10 rounded-xl px-4 py-3"
+                            >
+                              <span className="text-amber-dark font-bold">•</span>
+                              <span className="flex-1">
+                                <span className="font-semibold text-ink">{record.patientName}</span>
+                                <span className="text-ink-pale ml-1">({formatTime(record.submittedAt)})</span>
+                                <span className="text-ink mx-2">·</span>
+                                <span className="text-ink">{record.projectName}</span>
+                                <span className="text-ink mx-2">·</span>
+                                <span className={cn('font-medium', risks ? 'text-amber-dark' : 'text-mint-dark')}>
+                                  {risks || '无异常'}
+                                </span>
+                              </span>
+                            </motion.li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <div className="text-sm text-ink-pale bg-warmwhite rounded-xl px-4 py-3">
+                        暂无稍后处理项
+                      </div>
+                    )}
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: 0.4 }}
+                  >
+                    <h3 className="text-lg font-bold text-mint-dark mb-3 flex items-center gap-2">
+                      🟢 已完成（{handoverData.completed.length} 位）
+                    </h3>
+                    {handoverData.completed.length > 0 ? (
+                      <ul className="space-y-2">
+                        {handoverData.completed.map((record, idx) => {
+                          const risks = record.checkedConditions
+                            .filter((c) => c.needNurseReview)
+                            .map((c) => getRiskDisplayLabel(c.label))
+                            .join('、');
+                          return (
+                            <motion.li
+                              key={record.id}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ duration: 0.25, delay: 0.45 + idx * 0.05 }}
+                              className="flex items-start gap-2 text-sm bg-mint/10 rounded-xl px-4 py-3"
+                            >
+                              <span className="text-mint-dark font-bold">•</span>
+                              <span className="flex-1">
+                                <span className="font-semibold text-ink">{record.patientName}</span>
+                                <span className="text-ink-pale ml-1">({formatTime(record.submittedAt)})</span>
+                                <span className="text-ink mx-2">·</span>
+                                <span className="text-ink">{record.projectName}</span>
+                                <span className="text-ink mx-2">·</span>
+                                <span className={cn('font-medium', risks ? 'text-amber-dark' : 'text-mint-dark')}>
+                                  {risks || '无异常'}
+                                </span>
+                              </span>
+                            </motion.li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <div className="text-sm text-ink-pale bg-warmwhite rounded-xl px-4 py-3">
+                        暂无已完成项
+                      </div>
+                    )}
+                  </motion.div>
+                </div>
+
+                <div className="px-6 py-4 border-t border-rose-light/20 flex items-center justify-end gap-3 shrink-0">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleCopyHandover}
+                    className={cn(
+                      'inline-flex items-center gap-2 h-11 px-6 rounded-full text-sm font-bold transition-all',
+                      copied
+                        ? 'bg-mint text-white'
+                        : 'bg-rose-light/50 text-rose-dark hover:bg-rose-light'
+                    )}
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-4 h-4" strokeWidth={2.2} />
+                        已复制
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" strokeWidth={2} />
+                        复制交班文字
+                      </>
+                    )}
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setShowHandoverModal(false)}
+                    className="inline-flex items-center gap-2 h-11 px-6 rounded-full text-sm font-bold bg-warmwhite text-ink-light hover:bg-ink-pale/10 transition-all"
+                  >
+                    关闭
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
