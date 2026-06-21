@@ -154,6 +154,12 @@ export default function SignPage() {
     setSmsVerified(true)
   }
 
+  const handleSmsExpired = () => {
+    setSmsVerified(false)
+    setSmsCode(null)
+    setSmsExpiredAt(null)
+  }
+
   const handleSubmit = () => {
     if (canProceedToSign()) {
       completeFlow()
@@ -503,12 +509,14 @@ export default function SignPage() {
                   {
                     icon: UserCheck,
                     label: '护士复核',
-                    value: nurseReview.reviewed
-                      ? `已复核 · ${nurseReview.reviewedItems.length}项 · ${formatReviewedAt(nurseReview.reviewedAt)}`
-                      : '无需复核',
+                    value: nurseReview.reviewed ? '已复核' : '无需复核',
                     color: 'from-mint to-mint-dark',
                     iconBg: nurseReview.reviewed ? 'bg-mint/30' : 'bg-ink-pale/20',
                     iconColor: nurseReview.reviewed ? 'text-mint-dark' : 'text-ink-pale',
+                    badge: nurseReview.reviewed
+                      ? `${nurseReview.reviewedItems.length}项 · ${formatReviewedAt(nurseReview.reviewedAt)}`
+                      : null,
+                    tags: nurseReview.reviewed ? nurseReview.reviewedItems : [],
                   },
                   {
                     icon: SummaryIcon,
@@ -518,34 +526,62 @@ export default function SignPage() {
                     iconBg: signMethod ? 'bg-rose-light/40' : 'bg-ink-pale/20',
                     iconColor: signMethod ? 'text-rose-dark' : 'text-ink-pale',
                   },
-                ].map((item, idx) => (
-                  <motion.div
-                    key={item.label}
-                    variants={itemVariants}
-                    transition={{ delay: idx * 0.04 }}
-                    className="flex items-center gap-4 rounded-2xl bg-warmwhite/60 p-4 transition-all hover:bg-warmwhite hover:shadow-[0_2px_12px_rgba(139,109,113,0.06)]"
-                  >
-                    <div
+                ].map((item, idx) => {
+                  const hasExtra = (item as { badge?: string | null; tags?: string[] }).badge || (item as { tags?: string[] }).tags?.length
+                  return (
+                    <motion.div
+                      key={item.label}
+                      variants={itemVariants}
+                      transition={{ delay: idx * 0.04 }}
                       className={cn(
-                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                        item.iconBg
+                        'rounded-2xl bg-warmwhite/60 p-4 transition-all hover:bg-warmwhite hover:shadow-[0_2px_12px_rgba(139,109,113,0.06)]',
+                        hasExtra ? 'flex flex-col gap-2.5' : 'flex items-center gap-4'
                       )}
                     >
-                      <item.icon
-                        className={cn('h-5 w-5', item.iconColor)}
-                        strokeWidth={2}
-                      />
-                    </div>
-                    <div className="flex min-w-0 flex-1 flex-col">
-                      <span className="text-xs font-medium text-ink-pale">
-                        {item.label}
-                      </span>
-                      <span className="mt-0.5 truncate text-sm font-semibold text-ink">
-                        {item.value}
-                      </span>
-                    </div>
-                  </motion.div>
-                ))}
+                      <div className="flex items-center gap-4 w-full">
+                        <div
+                          className={cn(
+                            'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+                            item.iconBg
+                          )}
+                        >
+                          <item.icon
+                            className={cn('h-5 w-5', item.iconColor)}
+                            strokeWidth={2}
+                          />
+                        </div>
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-xs font-medium text-ink-pale">
+                            {item.label}
+                          </span>
+                          <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-ink">
+                              {item.value}
+                            </span>
+                            {(item as { badge?: string | null }).badge && (
+                              <span className="rounded-full bg-mint/25 px-2.5 py-0.5 text-[11px] font-bold text-mint-dark">
+                                {(item as { badge: string }).badge}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {(item as { tags?: string[] }).tags &&
+                        (item as { tags: string[] }).tags.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 pl-14">
+                            {(item as { tags: string[] }).tags.map((t, i) => (
+                              <span
+                                key={i}
+                                className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-mint-dark shadow-[0_1px_3px_rgba(127,191,153,0.10)]"
+                              >
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                    </motion.div>
+                  )
+                })}
               </div>
             </motion.div>
           </motion.div>
@@ -645,6 +681,7 @@ export default function SignPage() {
                       verified={smsVerified}
                       smsExpiredAt={smsExpiredAt}
                       onVerified={handleSmsVerified}
+                      onExpired={handleSmsExpired}
                     />
                   </motion.div>
                 )}

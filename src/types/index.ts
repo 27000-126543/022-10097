@@ -54,6 +54,42 @@ export interface FAQItem {
 
 export type SignMethod = "handwrite" | "photo" | "sms" | null;
 
+export type ConsentStatus = 'pending_review' | 'called' | 'completed';
+
+export interface ConsentRecord {
+  id: string;
+  createdAt: string;
+  patientName: string;
+  phone: string;
+  projectName: string;
+  projectCode: string;
+  bodyPart: string;
+  anesthesiaLabel: string;
+  doctorName: string;
+  queueNumber: string;
+  status: ConsentStatus;
+
+  understoodRisks: string[];
+
+  checkedConditions: {
+    id: string;
+    label: string;
+    needNurseReview: boolean;
+  }[];
+
+  nurseReview: NurseReview;
+
+  signMethod: Exclude<SignMethod, null>;
+  handwriteData?: string | null;
+  photoData?: string | null;
+  smsCode?: string | null;
+  smsVerifiedPhone?: string | null;
+
+  voiceCompleted: boolean;
+
+  submittedAt: string | null;
+}
+
 export interface NurseReview {
   reviewed: boolean;
   reviewedAt: string | null;
@@ -76,4 +112,5 @@ export interface SignFlowState {
   queueNumber: string;
   nurseReview: NurseReview;
   confirmedSignMethod: SignMethod;
+  consentRecords: ConsentRecord[];
 }

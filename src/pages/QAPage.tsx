@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { HelpCircle, UserCheck, AlertTriangle, X, CheckCircle2, ShieldCheck } from 'lucide-react'
@@ -17,24 +17,41 @@ export default function QAPage() {
   const toggleSpecialCondition = useSignFlowStore((s) => s.toggleSpecialCondition)
   const hasCheckedSpecialCondition = useSignFlowStore((s) => s.hasCheckedSpecialCondition)
   const setNurseReview = useSignFlowStore((s) => s.setNurseReview)
+  const nurseReview = useSignFlowStore((s) => s.nurseReview)
 
   const [nurseConfirmed, setNurseConfirmed] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [nurseId, setNurseId] = useState('')
   const [nurseIdVerified, setNurseIdVerified] = useState(false)
 
+  const needReviewIds = useMemo(
+    () => conditions
+      .filter(c => c.checked && c.needNurseReview)
+      .map(c => c.id)
+      .join(','),
+    [conditions]
+  )
+  const prevIdsRef = useRef(needReviewIds)
+  useEffect(() => {
+    if (prevIdsRef.current !== needReviewIds) {
+      prevIdsRef.current = needReviewIds;
+      if (nurseConfirmed) {
+        setNurseConfirmed(false);
+      }
+    }
+  }, [needReviewIds, nurseConfirmed])
+
+  useEffect(() => {
+    if (nurseConfirmed && nurseReview.reviewed && nurseReview.reviewedItems.length === 0) {
+      setNurseConfirmed(false)
+    }
+  }, [nurseConfirmed, nurseReview.reviewed, nurseReview.reviewedItems.length])
+
   useEffect(() => {
     if (!appointment) {
       navigate('/', { replace: true })
     }
   }, [appointment, navigate])
-
-  useEffect(() => {
-    if (!showModal) {
-      setNurseId('')
-      setNurseIdVerified(false)
-    }
-  }, [showModal])
 
   const handleBack = () => {
     navigate(-1)
@@ -69,6 +86,11 @@ export default function QAPage() {
     setNurseReview(reviewedItems)
     setNurseConfirmed(true)
     setShowModal(false)
+    console.debug('[护士复核完成]', {
+      nurseId,
+      reviewedItems,
+      timestamp: new Date().toISOString(),
+    })
   }
 
   const handleSign = () => {
@@ -77,7 +99,7 @@ export default function QAPage() {
 
   const hasAnyChecked = conditions.some((c) => c.checked)
   const needNurse = hasCheckedSpecialCondition()
-  const canProceed = hasAnyChecked && (!needNurse || nurseConfirmed)
+  const canProceed = hasAnyChecked && (!needNurse || nurseConfirmed) && (nurseReview.reviewed === true || !needNurse)
   const nurseReviewItems = conditions.filter((c) => c.checked && c.needNurseReview)
 
   if (!appointment) return null
@@ -141,6 +163,11 @@ export default function QAPage() {
                         ? '护士已复核您的特殊情况，可以继续签署流程'
                         : '因您勾选了需要护士复核的项目，请呼叫护士进行当面确认'}
                     </p>
+                    {nurseConfirmed && nurseReview.reviewedItems.length > 0 && (
+                      <p className="mt-1.5 text-xs text-amber-dark/70">
+                        已复核：{nurseReview.reviewedItems.join('、')}
+                      </p>
+                    )}
                   </div>
                 </div>
 

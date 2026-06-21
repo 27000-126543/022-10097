@@ -10,6 +10,8 @@ import IdentityPage from "@/pages/IdentityPage";
 import RisksPage from "@/pages/RisksPage";
 import QAPage from "@/pages/QAPage";
 import SignPage from "@/pages/SignPage";
+import NurseRecordsPage from "@/pages/NurseRecordsPage";
+import ConsentPreviewPage from "@/pages/ConsentPreviewPage";
 
 const pageVariants = {
   initial: (direction: number) => ({
@@ -118,6 +120,36 @@ function AnimatedRoutes() {
               className="h-full w-full"
             >
               <SignPage />
+            </motion.div>
+          }
+        />
+        <Route
+          path="/nurse-records"
+          element={
+            <motion.div
+              custom={direction}
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="h-full w-full"
+            >
+              <NurseRecordsPage />
+            </motion.div>
+          }
+        />
+        <Route
+          path="/consent-preview/:recordId"
+          element={
+            <motion.div
+              custom={direction}
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="h-full w-full"
+            >
+              <ConsentPreviewPage />
             </motion.div>
           }
         />

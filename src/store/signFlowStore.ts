@@ -4,6 +4,8 @@ import type {
   SignFlowState,
   SpecialCondition,
   SignMethod,
+  ConsentRecord,
+  ConsentStatus,
 } from "@/types";
 import { specialConditions as defaultConditions } from "@/data/mockFAQs";
 import { findAppointmentByPhone } from "@/data/mockAppointments";
@@ -27,7 +29,13 @@ interface SignFlowStore extends SignFlowState {
   setNurseReview: (items: string[]) => void;
   completeFlow: () => void;
   resetFlow: () => void;
+  fullReset: () => void;
   canProceedToSign: () => boolean;
+  addConsentRecord: (rec: ConsentRecord) => void;
+  updateConsentRecordStatus: (id: string, status: ConsentStatus) => void;
+  findConsentRecordById: (id: string) => ConsentRecord | undefined;
+  resetNurseReview: () => void;
+  checkSmsValidNow: () => boolean;
 }
 
 function generateQueueNumber(): string {
@@ -55,6 +63,7 @@ const initialState: SignFlowState = {
     reviewedItems: [],
   },
   confirmedSignMethod: null,
+  consentRecords: [],
 };
 
 export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
@@ -98,7 +107,28 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
           if (c.id !== "sc-6") c.checked = false;
         });
       }
-      return { specialConditions: next };
+      let nurseReview = s.nurseReview;
+      if (s.nurseReview.reviewed) {
+        const oldSet = new Set(
+          s.specialConditions
+            .filter((c) => c.checked && c.needNurseReview)
+            .map((c) => c.id)
+        );
+        const newSet = new Set(
+          next.filter((c) => c.checked && c.needNurseReview).map((c) => c.id)
+        );
+        const setsEqual =
+          oldSet.size === newSet.size &&
+          [...oldSet].every((x) => newSet.has(x));
+        if (!setsEqual) {
+          nurseReview = {
+            reviewed: false,
+            reviewedAt: null,
+            reviewedItems: [],
+          };
+        }
+      }
+      return { specialConditions: next, nurseReview };
     }),
 
   hasCheckedSpecialCondition: () =>
@@ -128,14 +158,82 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
       },
     }),
 
-  completeFlow: () =>
-    set({
+  completeFlow: () => {
+    const state = get();
+    const qn = generateQueueNumber();
+    const finalSignMethod = (state.confirmedSignMethod || state.signMethod)!;
+    const hasNeedNurseReview = state.specialConditions.some(
+      (c) => c.checked && c.needNurseReview
+    );
+    let status: ConsentStatus;
+    if (state.nurseReview.reviewed) {
+      status = "completed";
+    } else if (hasNeedNurseReview) {
+      status = "pending_review";
+    } else {
+      status = "called";
+    }
+    const rec: ConsentRecord = {
+      id: `CR-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      patientName: state.appointment?.patientName || "",
+      phone: state.phone,
+      projectName: state.appointment?.projectName || "",
+      projectCode: state.appointment?.projectCode || "",
+      bodyPart: state.appointment?.bodyPart || "",
+      anesthesiaLabel: state.appointment?.anesthesiaLabel || "",
+      doctorName: state.appointment?.doctor.name || "",
+      queueNumber: qn,
+      status,
+      understoodRisks: [...state.understoodRisks],
+      checkedConditions: state.specialConditions
+        .filter((c) => c.checked)
+        .map((c) => ({
+          id: c.id,
+          label: c.label,
+          needNurseReview: c.needNurseReview,
+        })),
+      nurseReview: { ...state.nurseReview },
+      signMethod: finalSignMethod,
+      handwriteData:
+        finalSignMethod === "handwrite" ? state.handwriteData : undefined,
+      photoData: finalSignMethod === "photo" ? state.photoData : undefined,
+      smsCode: finalSignMethod === "sms" ? state.smsCode : undefined,
+      smsVerifiedPhone:
+        finalSignMethod === "sms" && state.smsVerified ? state.phone : undefined,
+      voiceCompleted: state.voiceCompleted,
+      submittedAt: new Date().toISOString(),
+    };
+    set((s) => ({
       completed: true,
-      queueNumber: generateQueueNumber(),
-      confirmedSignMethod: get().signMethod,
+      queueNumber: qn,
+      confirmedSignMethod: finalSignMethod,
+      consentRecords: [rec, ...s.consentRecords],
+    }));
+  },
+
+  resetFlow: () =>
+    set({
+      phone: initialState.phone,
+      appointment: initialState.appointment,
+      understoodRisks: initialState.understoodRisks,
+      specialConditions: initialState.specialConditions.map((c) => ({ ...c })),
+      voiceCompleted: initialState.voiceCompleted,
+      signMethod: initialState.signMethod,
+      handwriteData: initialState.handwriteData,
+      photoData: initialState.photoData,
+      smsVerified: initialState.smsVerified,
+      smsCode: initialState.smsCode,
+      smsExpiredAt: initialState.smsExpiredAt,
+      completed: initialState.completed,
+      queueNumber: initialState.queueNumber,
+      nurseReview: {
+        ...initialState.nurseReview,
+      },
+      confirmedSignMethod: initialState.confirmedSignMethod,
     }),
 
-  resetFlow: () => set({ ...initialState, queueNumber: "" }),
+  fullReset: () => set({ ...initialState }),
 
   canProceedToSign: () => {
     const {
@@ -149,7 +247,49 @@ export const useSignFlowStore = create<SignFlowStore>((set, get) => ({
     if (!signMethod) return false;
     if (signMethod === "handwrite") return !!handwriteData;
     if (signMethod === "photo") return !!photoData;
-    if (signMethod === "sms") return smsVerified;
+    if (signMethod === "sms") {
+      if (!smsVerified) return false;
+      if (!get().checkSmsValidNow()) {
+        set({
+          smsVerified: false,
+          smsCode: null,
+          smsExpiredAt: null,
+        });
+        return false;
+      }
+      return true;
+    }
     return false;
+  },
+
+  addConsentRecord: (rec) =>
+    set((s) => ({
+      consentRecords: [rec, ...s.consentRecords],
+    })),
+
+  updateConsentRecordStatus: (id, status) =>
+    set((s) => ({
+      consentRecords: s.consentRecords.map((r) =>
+        r.id === id ? { ...r, status } : r
+      ),
+    })),
+
+  findConsentRecordById: (id) =>
+    get().consentRecords.find((r) => r.id === id),
+
+  resetNurseReview: () =>
+    set({
+      nurseReview: {
+        reviewed: false,
+        reviewedAt: null,
+        reviewedItems: [],
+      },
+    }),
+
+  checkSmsValidNow: () => {
+    const { smsVerified, smsExpiredAt } = get();
+    if (!smsVerified) return false;
+    if (!smsExpiredAt) return false;
+    return Date.now() < smsExpiredAt;
   },
 }));

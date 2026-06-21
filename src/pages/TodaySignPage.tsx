@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Heart, Shield } from 'lucide-react';
+import { Heart, Shield, Stethoscope } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useSignFlowStore } from '@/store/signFlowStore';
 import PhoneInput from '@/components/PhoneInput';
@@ -58,8 +58,21 @@ export default function TodaySignPage() {
             悦美医美 · 术前知情同意
           </h1>
 
-          <div className="text-sm text-ink-light font-medium bg-warmwhite px-4 py-2 rounded-full">
-            {todayDate}
+          <div className="flex items-center gap-2">
+            <div className="text-sm text-ink-light font-medium bg-warmwhite px-4 py-2 rounded-full">
+              {todayDate}
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/nurse-records')}
+              title="护士工作站"
+              className="group relative flex h-9 w-9 items-center justify-center rounded-full bg-warmwhite text-ink-light transition-all duration-300 hover:bg-rose-light/40 hover:text-rose-dark active:scale-95"
+            >
+              <Stethoscope className="h-4 w-4" strokeWidth={2} />
+              <span className="pointer-events-none absolute -top-10 right-0 whitespace-nowrap rounded-full bg-ink/85 px-3 py-1.5 text-[11px] font-medium text-white opacity-0 shadow-md transition-opacity duration-200 group-hover:opacity-100">
+                护士工作站
+              </span>
+            </button>
           </div>
         </div>
       </motion.header>
